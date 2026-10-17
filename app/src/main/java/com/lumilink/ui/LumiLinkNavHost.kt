@@ -10,7 +10,9 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import android.util.Log
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,6 +60,16 @@ fun LumiLinkNavHost() {
     val connState by container.cameraNetworkManager.state.collectAsStateWithLifecycle()
     val connected = connState is ConnectionState.Connected
 
+    // Log every route change while the nav host is alive — the CLI dev loop reads these to
+    // verify navigation without seeing the screen.
+    DisposableEffect(navController) {
+        val listener = NavController.OnDestinationChangedListener { _, destination, _ ->
+            Log.i("NavHost", "route -> ${destination.route}")
+        }
+        navController.addOnDestinationChangedListener(listener)
+        onDispose { navController.removeOnDestinationChangedListener(listener) }
+    }
+
     // React to connection *transitions* only — not to a tab re-entering while already connected,
     // which is exactly the bounce that plagued the old linear flow.
     var wasConnected by rememberSaveable { mutableStateOf(false) }
@@ -100,12 +112,17 @@ private fun BottomNav(navController: NavController, connected: Boolean) {
                 selected = currentRoute == tab.route,
                 enabled = enabled,
                 onClick = {
+                    Log.i("NavHost", "tap ${tab.label} (currentRoute=$currentRoute)")
                     if (currentRoute != tab.route) {
+                        val startRoute = navController.graph.findStartDestination().route
                         navController.navigate(tab.route) {
                             // Preserve/restore each tab's back stack & state across switches.
+                            // The start destination (Connect) is the popUpTo target, so
+                            // restoreState there would re-restore the sibling stack we just
+                            // saved (lands you straight back on the old tab) — never restore it.
                             popUpTo(navController.graph.findStartDestination().id) { saveState = true }
                             launchSingleTop = true
-                            restoreState = true
+                            restoreState = tab.route != startRoute
                         }
                     }
                 },
