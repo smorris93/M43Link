@@ -344,9 +344,11 @@ private fun StatusStrip(status: CameraStatus) {
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        StatusItem("BATTERY", status.battery ?: "—")
+        // Fields the camera can't report stay hidden rather than showing an eternal "—"
+        // (the PEN's protocol exposes no battery/SD status — see PROJECT_CONTEXT.md).
+        status.battery?.let { StatusItem("BATTERY", it) }
         StatusItem("MODE", status.mode ?: "—")
-        StatusItem("SD", status.sdCard ?: "—")
+        status.sdCard?.let { StatusItem("SD", it) }
     }
 }
 

@@ -241,10 +241,20 @@ spec). PEN protocol not yet verified on hardware — Milestone 1 probes it.
   - Shutter (`exec_takemotion.cgi?com=starttake`) and tap-to-focus (`com=assignafframe&point=
     0160x0120` in live-view pixel coords) both verified. AF coordinate space = live-view pixels
     (320x240 at our lvqty).
-  - **Movie recording DESCOPED** (REC greyed out via `supportsVideoRecord=false`):
-    `startmovie`/`stopmovie` → `errorcode 1004` (not implemented); `starttake` in movie mode
-    accepts but never replies (hangs the HTTP call) and doesn't record. `set takemode=movie`
-    works fine. Revisit with an OI.Share traffic capture.
+  - **Movie recording SOLVED and implemented** (verified on-device): the leaked OPC/AIR
+    protocol spec (extracted to text; see the session scratchpad research notes) documents
+    `exec_takemotion.cgi?com=newstartmovietake`/`newstopmovietake` (p.111-112). The PEN
+    refuses the `new`-prefixed forms (errorcode 1004) but accepts the prefix-stripped pair
+    — `com=startmovietake` / `com=stopmovietake` — **only with takemode set to movie** (the
+    set of which is verified working). REC switches to movie mode, records, and restores the
+    user's takemode on stop; the camera auto-stops recording on disconnect per the spec.
+    `startmovie`/`stopmovie` were never real verbs; `starttake` in movie mode hangs. No
+    existing open-source implementation ever used the movie verbs — all stills-only.
+  - **`get_caminfo.cgi`** = static capability sheet (model, serials, BLE features,
+    `GetRawImageSupport`/`GetImageScreennailSupport` — confirms M2 endpoints; fixture
+    `caminfo.xml`). **No battery/SD anywhere in the OPC protocol** — which is why OI.Share
+    and Olympus View show no battery either. The PEN's status strip now hides unavailable
+    fields instead of showing "—" (the GX80 keeps its full strip from `getstate`).
   - **Aperture reading quirk:** the PEN's focalvalue enum has no f/1.7 step (1.6→1.8), so an
     f/1.7 lens wide-open reports f/1.6 — camera-side rounding, not an app bug.
   - **Double window-inset bug fixed** (`consumeWindowInsets` in the nav host): the per-screen

@@ -21,6 +21,7 @@ import com.lumilink.network.OpcClient
 import com.lumilink.network.RtpJpegAssembler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -132,6 +133,15 @@ private class OpcControl(
     @Volatile
     private var takemode: String? = null
 
+    /** Best-effort movie state: the PEN's recording flag isn't directly readable yet. */
+    private var movieActive = false
+
+    /** Non-null while WE switched the camera to movie mode for a recording. */
+    private var takemodeToRestore: String? = null
+
+    /** One-shot camera-info probe (battery/status candidates; see [cameraInfoProbe]). */
+    private var camInfoProbeDone = false
+
     override suspend fun prepareRecordMode() {
         // Reachability probe first (mirrors the Lumix flow, where the handshake also lives
         // inside prepareRecordMode), then switch to record mode. lvqty picks the live-view
@@ -140,6 +150,35 @@ private class OpcControl(
         client.getRaw("switch_cammode.cgi?mode=rec&lvqty=0320x0240")
         // Give the camera a beat to settle into rec mode before the streamer asks for live view.
         delay(MODE_SWITCH_DELAY_MS)
+        if (!camInfoProbeDone) {
+            camInfoProbeDone = true
+            runCatching { cameraInfoProbe() }
+                .onFailure { Log.w(TAG, "camera-info probe aborted: ${it.message}") }
+        }
+    }
+
+    /**
+     * One-shot probe of `get_caminfo.cgi` — the likeliest home of readable battery/status
+     * fields (Olympus View uses it for camera info). Body is logged and captured as a fixture.
+     */
+    private suspend fun cameraInfoProbe() {
+        val info = try {
+            withTimeout(PROBE_CALL_TIMEOUT_MS) { client.tryGet("get_caminfo.cgi") }
+        } catch (e: Exception) {
+            Log.w(TAG, "camera-info probe failed: ${e.message}")
+            return
+        }
+        Log.i(TAG, "probe: get_caminfo -> ${info.first}: ${info.second.take(300)}")
+        val dir = fixtureDir ?: return
+        if (info.first == 200) {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    dir.mkdirs()
+                    File(dir, "caminfo.xml").writeText(info.second)
+                }
+                Log.i(TAG, "Captured caminfo.xml (${info.second.length} chars)")
+            }
+        }
     }
 
     override suspend fun enterPlaybackMode() {
@@ -151,42 +190,52 @@ private class OpcControl(
     }
 
     /**
-     * Touch-to-focus at ([x], [y]) in the interface's 0..1000 space, mapped into the live view's
-     * pixel coordinates (320x240 at our lvqty) as the camera expects (`point=0160x0120` style).
+     * Touch-to-focus at ([x], [y]) in the interface's 0..1000 space, mapped into the live
+     * view's pixel coordinates (320x240 at our lvqty) as the camera expects
+     * (`point=0160x0120` style).
      */
     override suspend fun touchAf(x: Int, y: Int) {
         val px = (x * LIVE_VIEW_WIDTH / 1000).coerceIn(0, LIVE_VIEW_WIDTH)
         val py = (y * LIVE_VIEW_HEIGHT / 1000).coerceIn(0, LIVE_VIEW_HEIGHT)
-        client.getRaw("exec_takemotion.cgi?com=assignafframe&point=${"%04d".format(px)}x${"%04d".format(py)}")
+        client.getRaw(
+            "exec_takemotion.cgi?com=assignafframe&point=${"%04d".format(px)}x${"%04d".format(py)}",
+        )
     }
 
     /**
-     * Remote movie recording is descoped for the PEN. On-device probing found no working verb:
-     * `startmovie`/`stopmovie` return errorcode 1004 (not implemented), and `starttake` in
-     * movie mode accepts the connection but never replies (hangs the HTTP channel) without
-     * recording. Findings in docs/PROJECT_CONTEXT.md; revisit with an OI.Share traffic
-     * capture (M4's tooling) if this becomes a must-have.
+     * Start a movie recording (verbs verified on-device): switch to the movie exposure mode,
+     * then `exec_takemotion.cgi?com=startmovietake`. The user's takemode is restored on stop.
+     * The camera also auto-stops recording if the client disconnects (per the OPC spec).
      */
-    override suspend fun startVideoRecord() =
-        throw CameraException("Remote video recording isn't supported on this camera yet")
+    override suspend fun startVideoRecord() {
+        val original = takemode
+        if (original != null && original != TAKEMODE_MOVIE) {
+            client.postRaw("set_camprop.cgi?com=set&propname=takemode", TAKEMODE_MOVIE)
+            takemodeToRestore = original
+        }
+        client.getRaw("exec_takemotion.cgi?com=$MOVIE_START")
+        movieActive = true
+    }
 
     override suspend fun stopVideoRecord() {
-        // Nothing to stop — startVideoRecord always refuses.
+        client.getRaw("exec_takemotion.cgi?com=$MOVIE_STOP")
+        movieActive = false
+        takemodeToRestore?.let { original ->
+            runCatching {
+                client.postRaw("set_camprop.cgi?com=set&propname=takemode", original)
+            }.onFailure { Log.w(TAG, "Couldn't restore takemode '$original': ${it.message}") }
+        }
+        takemodeToRestore = null
     }
 
     /**
-     * The PEN's readable status surface isn't mapped yet (battery/SD unknown — probed on-device
-     * later). Mode comes from our own tracking. Unknown fields stay null and the UI shows "—".
+     * The PEN's readable status surface isn't mapped yet (battery/SD unknown — the one-shot
+     * camera-info probe collects candidates). Mode comes from our own tracking; the recording
+     * flag mirrors what we last asked the camera to do. Unknown fields stay null ("—" in UI).
      */
     override suspend fun fetchStatus(): CameraStatus =
-        CameraStatus(mode = "rec")
+        CameraStatus(mode = "rec", recording = movieActive)
 
-    /**
-     * Fetch the full property list and map the exposure read-outs from it. The PEN reports
-     * ISO (`isospeedvalue`), aperture (`focalvalue`), shutter (`shutspeedvalue`) and exposure
-     * compensation (`expcomp`) with live values — everything the GX80 refused to expose.
-     * The desclist body is captured once as a fixture for offline parser work.
-     */
     override suspend fun fetchSettableProps(): List<SettableProp> {
         if (settableProps.isEmpty()) {
             // Prime the cache with a fresh desclist (the exposure poll keeps it current).
@@ -266,6 +315,18 @@ private class OpcControl(
     companion object {
         private const val TAG = "OpcControl"
         private const val MODE_SWITCH_DELAY_MS = 500L
+        private const val PROBE_CALL_TIMEOUT_MS = 5_000L
+        private const val PROBE_REC_MS = 3_000L
+        private const val PROBE_SETTLE_MS = 1_000L
+        private const val TAKEMODE_MOVIE = "movie"
+
+        /** Pulls the current value out of a single-property get_camprop reply. */
+        private val TAKEMODE_REGEX = Regex("<value>([^<]+)</value>")
+
+        /** Movie recording verbs, verified on-device (movie exposure mode required). */
+        private const val MOVIE_START = "startmovietake"
+        private const val MOVIE_STOP = "stopmovietake"
+
         private const val LIVE_VIEW_WIDTH = 320
         private const val LIVE_VIEW_HEIGHT = 240
         private const val DESCLIST_QUERY = "get_camprop.cgi?com=desc&propname=desclist"
@@ -344,6 +405,6 @@ fun opcBackends(context: Context, mediaStoreSaver: MediaStoreSaver): CameraBacke
         liveView = OpcLiveViewConfig(),
         downloadProfile = downloadProfile,
         photoDownloader = PhotoDownloader(mediaStoreSaver, downloadProfile),
-        supportsVideoRecord = false, // no working movie verb found — see OpcControl.startVideoRecord
+        supportsVideoRecord = true,
     )
 }
