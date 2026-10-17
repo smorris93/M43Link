@@ -123,7 +123,11 @@ fun GalleryScreen() {
 
     // Background warmer: gently pre-cache the whole thumbnail set (small batches, paced) so the
     // entire gallery becomes instant to scroll — without flooding the camera's fragile server.
-    LaunchedEffect(state.allPhotos) {
+    // Paused while a download batch runs: the PEN's file server crosses response streams between
+    // concurrent requests (measured on-device), so thumbnail traffic during a transfer risks
+    // corrupting the file being downloaded. Restarts automatically when the batch finishes.
+    LaunchedEffect(state.allPhotos, state.downloading) {
+        if (state.downloading) return@LaunchedEffect
         val urls = state.allPhotos.mapNotNull { it.thumbnailUrl }
         if (urls.isEmpty()) return@LaunchedEffect
         delay(WARM_START_DELAY_MS) // let the first visible screen load first
@@ -349,8 +353,11 @@ private fun PhotoPreview(
     onClose: () -> Unit,
 ) {
     BackHandler(onBack = onClose)
-    // RAW files can't be shown as an image, so preview the thumbnail for those.
-    val previewUrl = if (photo.isRaw) photo.thumbnailUrl else photo.originalUrl
+    // Cameras that serve a medium preview (the PEN's screennail) use it — loading the full
+    // original for a viewer swipe is slow over camera Wi-Fi. RAW files can't be shown as an
+    // image at all, so those fall back to the thumbnail.
+    val previewUrl = photo.previewUrl
+        ?: if (photo.isRaw) photo.thumbnailUrl else photo.originalUrl
 
     Surface(color = Color.Black, modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {

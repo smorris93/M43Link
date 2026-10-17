@@ -15,6 +15,12 @@ interface DownloadProfile {
      */
     val maxConcurrentDownloads: Int
 
+    /**
+     * User-Agent to send on download requests, or null when the camera doesn't check (the
+     * Lumix). OM System bodies expect OI.Share's UA on every request.
+     */
+    val downloadUserAgent: String? get() = null
+
     /** MIME type for MediaStore when saving [photo]'s original file. */
     fun mimeTypeFor(photo: CameraPhoto): String
 

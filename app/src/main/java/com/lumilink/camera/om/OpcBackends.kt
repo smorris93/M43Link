@@ -105,21 +105,6 @@ private class OpcConnection(
     }
 }
 
-/** Placeholder until Milestone 2 — browsing the card over `get_imglist.cgi`. */
-private class OpcPhotoLister(
-    private val connection: OpcConnection,
-) : PhotoLister {
-    override suspend fun ensurePlaybackMode() {
-        // Nothing to assert yet; the camera's mode doesn't block the M1 connection flow.
-    }
-
-    override suspend fun listPhotos(): List<CameraPhoto> {
-        // Milestone 1 verification: prove the camera's API answers before failing.
-        connection.establishSession()
-        throw CameraException("OM System PEN photo browsing arrives in Milestone 2")
-    }
-}
-
 /** Placeholder until Milestone 3 — shutter/live view/exposure over the OPC control CGIs. */
 private class OpcControl(
     private val connection: OpcConnection,
@@ -154,9 +139,15 @@ private data class OpcLiveViewConfig(override val port: Int = DEFAULT_PORT) : Li
     }
 }
 
-/** ORF RAWs; sequential downloads until on-device measurement (M2) says otherwise. */
+/**
+ * ORF RAWs; strictly sequential downloads. Measured on-device (10-file, 85 MB batch):
+ * x2 gave no throughput gain (29.9 s vs 29.7 s) AND the camera's server silently crossed
+ * response streams between concurrent transfers, corrupting the saved files. Never raise
+ * this without re-verifying integrity, not just speed.
+ */
 private class OpcDownloadProfile : DownloadProfile {
     override val maxConcurrentDownloads: Int get() = 1
+    override val downloadUserAgent: String? get() = OpcClient.USER_AGENT
     override fun mimeTypeFor(photo: CameraPhoto): String =
         if (photo.isRaw) "image/x-olympus-orf" else "image/jpeg"
 
@@ -172,7 +163,7 @@ fun opcBackends(context: Context, mediaStoreSaver: MediaStoreSaver): CameraBacke
     return CameraBackends(
         type = CameraType.OM_SYSTEM_PEN,
         connection = connection,
-        photoLister = OpcPhotoLister(connection),
+        photoLister = OpcPhotoLister(client),
         control = OpcControl(connection),
         liveView = OpcLiveViewConfig(),
         downloadProfile = downloadProfile,

@@ -61,6 +61,9 @@ class OpcClient(
     companion object {
         const val DEFAULT_BASE_URL = "http://192.168.0.10"
 
+        /** Builds the absolute URL for a path/query (e.g. file-serving paths, CGI endpoints). */
+        fun urlFor(baseUrl: String, pathAndQuery: String): String = "$baseUrl/$pathAndQuery"
+
         /**
          * The UA string OI.Share sends. Older Olympus bodies reject requests that don't look
          * like their own app, so we keep sending it until the PEN is verified without it.

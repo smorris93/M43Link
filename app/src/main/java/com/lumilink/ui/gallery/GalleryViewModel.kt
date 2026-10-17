@@ -1,5 +1,6 @@
 package com.lumilink.ui.gallery
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -12,8 +13,12 @@ import com.lumilink.model.CameraPhoto
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Order photos are shown in. The camera lists oldest-first, so NEWEST just reverses that. */
 enum class SortOrder { NEWEST, OLDEST }
@@ -25,6 +30,8 @@ enum class SortOrder { NEWEST, OLDEST }
 class GalleryViewModel(
     private val photoLister: PhotoLister,
     private val photoDownloader: PhotoDownloader,
+    /** Per-camera cap on simultaneous downloads (see DownloadProfile; 1 = sequential). */
+    private val maxConcurrentDownloads: Int = 1,
 ) : ViewModel() {
 
     data class UiState(
@@ -107,29 +114,72 @@ class GalleryViewModel(
             _uiState.update {
                 it.copy(downloading = true, downloadProgress = 0f, error = null, statusMessage = null)
             }
-            var completed = 0
+            val completed = AtomicInteger()
+            val failed = AtomicInteger()
+            val batchStart = System.currentTimeMillis()
+            // Camera safety: a run of consecutive failures means the camera is struggling —
+            // stop hammering it and report, instead of dragging the whole batch through retries.
+            val failureStreak = AtomicInteger()
             try {
-                for (photo in photos) {
-                    photoDownloader.download(photo) { fileProgress ->
-                        val overall = (completed + fileProgress) / photos.size
-                        _uiState.update { it.copy(downloadProgress = overall) }
+                coroutineScope {
+                    val gate = Semaphore(maxConcurrentDownloads.coerceAtLeast(1))
+                    photos.forEach { photo ->
+                        launch {
+                            gate.withPermit {
+                                if (failureStreak.get() >= ABORT_FAILURE_STREAK) return@withPermit
+                                try {
+                                    val fileStart = System.currentTimeMillis()
+                                    val sizeMb = (photo.sizeBytes ?: 0L) / 1024.0 / 1024.0
+                                    photoDownloader.download(photo) { fileProgress ->
+                                        val overall = (
+                                            (completed.get() + failed.get() + fileProgress).toFloat() /
+                                                photos.size
+                                            ).coerceIn(0f, 1f)
+                                        _uiState.update { it.copy(downloadProgress = overall) }
+                                    }
+                                    Log.i(
+                                        TAG,
+                                        "downloaded ${photo.title} (" + "%.1f".format(sizeMb) +
+                                            " MB) in ${System.currentTimeMillis() - fileStart} ms",
+                                    )
+                                    completed.incrementAndGet()
+                                    failureStreak.set(0)
+                                } catch (e: Exception) {
+                                    failed.incrementAndGet()
+                                    failureStreak.incrementAndGet()
+                                    Log.w(TAG, "Download failed: ${photo.title}: ${e.message}")
+                                }
+                            }
+                        }
                     }
-                    completed++
                 }
+                val elapsed = System.currentTimeMillis() - batchStart
+                val totalMb = photos.sumOf { it.sizeBytes ?: 0L } / 1024.0 / 1024.0
+                Log.i(
+                    TAG,
+                    "batch done: ${completed.get()}/${photos.size} ok, " + "%.1f".format(totalMb) +
+                        " MB in ${elapsed} ms (x$maxConcurrentDownloads)",
+                )
                 _uiState.update {
+                    val saved = completed.get()
+                    val broken = failed.get()
+                    val message = when {
+                        broken == 0 -> "Saved $saved photo(s) to your device"
+                        failureStreak.get() >= ABORT_FAILURE_STREAK ->
+                            "Stopped after $broken failures — the camera seems busy. Saved $saved " +
+                                "of ${photos.size}."
+                        else -> "Saved $saved of ${photos.size} ($broken failed)"
+                    }
                     it.copy(
                         downloading = false,
                         downloadProgress = 1f,
                         selectedIds = if (clearSelectionAfter) emptySet() else it.selectedIds,
-                        statusMessage = "Saved $completed photo(s) to your device",
+                        statusMessage = message,
                     )
                 }
             } catch (e: Exception) {
                 _uiState.update {
-                    it.copy(
-                        downloading = false,
-                        statusMessage = "Download failed after $completed of ${photos.size}: ${e.message}",
-                    )
+                    it.copy(downloading = false, statusMessage = "Download stopped: ${e.message}")
                 }
             }
         }
@@ -140,10 +190,17 @@ class GalleryViewModel(
     }
 
     companion object {
+        private const val TAG = "GalleryViewModel"
+        private const val ABORT_FAILURE_STREAK = 3
+
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val backends = container.backends()
-                GalleryViewModel(backends.photoLister, backends.photoDownloader)
+                GalleryViewModel(
+                    backends.photoLister,
+                    backends.photoDownloader,
+                    backends.downloadProfile.maxConcurrentDownloads,
+                )
             }
         }
     }

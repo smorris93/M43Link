@@ -194,6 +194,28 @@ spec). PEN protocol not yet verified on hardware — Milestone 1 probes it.
     rec/play juggling.
   - Fixtures: `captureFixtures()` in `OpcConnection` writes any 200 responses to
     `files/opc_fixtures/` — pull with `adb shell run-as com.lumilink cat files/opc_fixtures/<f>`.
+- **M2 PEN photo browsing + download (done, verified on-device 2026-10-17):** `ImgListParser`
+  handles the `VER_100` CSV (`dir,file,size,attrib,dateRaw,timeRaw`; FAT attribute bits, packed
+  FAT date/time — fixture decodes to 2026-10-13 10:55:42). `OpcPhotoLister` walks `/DCIM` →
+  `100OMSYS` → 204 photos in 2 HTTP calls. URLs: thumbnails `get_thumbnail.cgi?DIR=<path>`,
+  previews `get_screennail.cgi?DIR=<path>`, **originals at the plain path**
+  `http://192.168.0.10/DCIM/100OMSYS/<file>` (full file, no resize round-trip).
+  `switch_cammode.cgi?mode=play` (non-fatal) precedes listing, 500 ms settle.
+  **PEN download findings (measured, 10-file/85 MB batch):**
+  - Sequential: ~2.85 MB/s effective, ~3 s per 8.5 MB JPG, zero retries. That's the radio +
+    server ceiling — parallelism doesn't help (below).
+  - **x2 concurrency: NO speed gain (29.9 s vs 29.7 s) AND the camera's file server silently
+    crossed response streams between concurrent transfers — saved files contained chunks of
+    other photos, camera reported 200s throughout.** PEN downloads are therefore strictly
+    sequential (`OpcDownloadProfile.maxConcurrentDownloads = 1`) and the gallery's thumbnail
+    warmer pauses during download batches (same stream-crossing risk via thumbnail requests).
+    Never raise PEN concurrency without verifying file integrity, not just speed.
+  - OI.Share UA is sent on all PEN traffic (Coil ImageLoader, downloads, OpcClient) — older
+    bodies reject requests without it.
+  - Batch downloader now runs bounded-parallel with per-camera cap + abort-on-3-consecutive-
+    failures; per-file and batch timings are logged (`GalleryViewModel` tag) for measurement.
+  - Videos on the card are listed-then-skipped (MOV etc.); RAW=ORF handled, though this card
+    is JPG-only so ORF is untested on-device.
 
 ## Sources
 - Lumix GX80 protocol: https://github.com/cleverfox/lumixproto

@@ -43,8 +43,15 @@ class LumiLinkApp : Application(), ImageLoaderFactory {
             .dispatcher(dispatcher)
             // The camera's server mishandles keep-alive: reusing a connection hangs until timeout.
             // Force a fresh connection per request (each is only ~50 ms) so nothing stalls.
+            // The OM System PEN also expects OI.Share's user-agent on every request — harmless
+            // to send to the Lumix, which doesn't check.
             .addInterceptor { chain ->
-                chain.proceed(chain.request().newBuilder().header("Connection", "close").build())
+                chain.proceed(
+                    chain.request().newBuilder()
+                        .header("User-Agent", "OI.Share v2")
+                        .header("Connection", "close")
+                        .build(),
+                )
             }
             .connectionPool(okhttp3.ConnectionPool(0, 1, TimeUnit.SECONDS))
             // Fail fast on a stuck connect so the slot frees up quickly instead of blocking ~5 s.

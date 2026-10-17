@@ -45,7 +45,9 @@ class PhotoDownloader(
 
     private suspend fun downloadOnce(photo: CameraPhoto, onProgress: (Float) -> Unit) =
         withContext(Dispatchers.IO) {
-            val request = Request.Builder().url(photo.originalUrl).build()
+            val request = Request.Builder().url(photo.originalUrl).apply {
+                downloadProfile.downloadUserAgent?.let { header("User-Agent", it) }
+            }.build()
             httpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     throw CameraException("Download failed: HTTP ${response.code}")
