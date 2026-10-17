@@ -1,10 +1,12 @@
 package com.lumilink.camera
 
 /**
- * Per-camera live-view parameters. The frame format itself lives in the streamer; this is the
- * part the UI/ViewModels need (the UDP port to listen on). The PEN's port/format is confirmed
- * on-device in Milestone 3.
+ * Per-camera live-view parameters: the UDP port to listen on and how to assemble JPEG frames
+ * from the incoming datagrams (see [FrameAssembler]).
  */
 interface LiveViewConfig {
     val port: Int
+
+    /** A fresh, stateful assembler for one streaming session. */
+    fun newFrameAssembler(): FrameAssembler
 }

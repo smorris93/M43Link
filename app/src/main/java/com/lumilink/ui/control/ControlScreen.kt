@@ -12,7 +12,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -24,9 +26,13 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -53,8 +59,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.lumilink.model.CameraExposure
+import com.lumilink.model.CameraType
+import com.lumilink.model.SettableProp
 import com.lumilink.model.CameraStatus
 import com.lumilink.ui.appContainer
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.delay
 
 /**
@@ -75,10 +84,11 @@ fun ControlScreen() {
         onDispose { viewModel.stop() }
     }
 
-    val snackbarHostState = remember { SnackbarHostState() }
+    // Transient status messages render inline (above the controls) and auto-clear — a
+    // bottom snackbar would cover the shutter/REC buttons while the user is tapping them.
     LaunchedEffect(state.message) {
-        state.message?.let {
-            snackbarHostState.showSnackbar(it)
+        if (state.message != null) {
+            delay(MESSAGE_AUTO_CLEAR_MS)
             viewModel.consumeMessage()
         }
     }
@@ -90,7 +100,6 @@ fun ControlScreen() {
                 actions = { ConnectedChip(ready = state.recordModeReady); Box(Modifier.size(12.dp)) },
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -99,25 +108,113 @@ fun ControlScreen() {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            LiveView(frame = liveFrame, onFocusTap = viewModel::focusAt)
-            ExposureGrid(state.exposure)
+            // The transient message overlays the live view (bottom centre) — zero layout
+            // footprint, so the readouts and buttons never shift when it appears or clears.
+            Box {
+                LiveView(frame = liveFrame, onFocusTap = viewModel::focusAt)
+                state.message?.let {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(8.dp),
+                    ) {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+            }
+            // Cameras that expose settable settings (the PEN) get live steppers built from the
+            // camera's own allowed values; the GX80 keeps its plain read-out grid.
+            if (state.settableProps.isNotEmpty()) {
+                SettablePropsRow(
+                    props = state.settableProps,
+                    enabled = state.recordModeReady && !state.busy,
+                    onAdjust = viewModel::adjustProp,
+                )
+            } else {
+                ExposureGrid(state.exposure)
+            }
             StatusStrip(state.status)
             Box(Modifier.weight(1f))
             ControlsRow(
                 enabled = state.recordModeReady && !state.busy,
                 recording = state.videoRecording,
+                videoEnabled = viewModel.supportsVideoRecord,
                 onAutofocus = viewModel::autofocus,
                 onCapture = viewModel::capture,
                 onToggleVideo = viewModel::toggleVideoRecord,
             )
+            val hint = if (container.credentialsStore.currentCameraType() == CameraType.LUMIX_GX80) {
+                "Tap the live view to focus there; AF focuses the centre. ISO is live; the " +
+                    "GX80 doesn't expose aperture/shutter over Wi-Fi in Manual mode."
+            } else {
+                "Tap the live view to focus there; AF focuses the centre. Exposure read-outs " +
+                    "appear as the PEN reports them."
+            }
             Text(
-                text = "Tap the live view to focus there; AF focuses the centre. ISO is live; the " +
-                    "GX80 doesn't expose aperture/shutter over Wi-Fi in Manual mode.",
+                text = hint,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
+        }
+    }
+}
+
+/** Live steppers for each settable setting, in the camera's own value order. */
+@Composable
+private fun SettablePropsRow(
+    props: List<SettableProp>,
+    enabled: Boolean,
+    onAdjust: (SettableProp, Int) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        props.forEach { prop ->
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(horizontal = 4.dp),
+            ) {
+                Text(
+                    text = prop.displayName,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = { onAdjust(prop, -1) },
+                        enabled = enabled && prop.canAdjust && prop.rawValue != prop.options.first(),
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(Icons.Default.Remove, contentDescription = "Decrease ${prop.displayName}")
+                    }
+                    Text(
+                        text = prop.displayValue,
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.widthIn(min = 36.dp),
+                        textAlign = TextAlign.Center,
+                    )
+                    IconButton(
+                        onClick = { onAdjust(prop, +1) },
+                        enabled = enabled && prop.canAdjust && prop.rawValue != prop.options.last(),
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "Increase ${prop.displayName}")
+                    }
+                }
+            }
         }
     }
 }
@@ -266,6 +363,7 @@ private fun StatusItem(label: String, value: String) {
 private fun ControlsRow(
     enabled: Boolean,
     recording: Boolean,
+    videoEnabled: Boolean,
     onAutofocus: () -> Unit,
     onCapture: () -> Unit,
     onToggleVideo: () -> Unit,
@@ -285,7 +383,7 @@ private fun ControlsRow(
         ShutterButton(enabled = enabled, onClick = onCapture)
         RingButton(
             label = if (recording) "STOP" else "REC",
-            enabled = enabled,
+            enabled = enabled && videoEnabled,
             tint = MaterialTheme.colorScheme.error,
             onClick = onToggleVideo,
             icon = if (recording) Icons.Default.Stop else Icons.Default.FiberManualRecord,
@@ -340,3 +438,5 @@ private fun ShutterButton(enabled: Boolean, onClick: () -> Unit) {
         Box(Modifier.size(50.dp).clip(CircleShape).background(accent.copy(alpha = alpha)))
     }
 }
+
+private const val MESSAGE_AUTO_CLEAR_MS = 2_500L

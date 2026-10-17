@@ -216,6 +216,43 @@ spec). PEN protocol not yet verified on hardware — Milestone 1 probes it.
     failures; per-file and batch timings are logged (`GalleryViewModel` tag) for measurement.
   - Videos on the card are listed-then-skipped (MOV etc.); RAW=ORF handled, though this card
     is JPG-only so ORF is untested on-device.
+- **M3 PEN live view + control (done, verified on-device 2026-10-17):**
+  - **Live view is standard RTP** (RFC 3550, PT 96): 12-byte header per datagram; frame-start
+    packets carry an RTP header *extension* (bit X, `00 01 00 3D` = profile 1 + 61 words =
+    244 B of frame metadata) and the JPEG SOI lands exactly at offset 12+4+244=260.
+    `RtpJpegAssembler` strips RTP headers (incl. extension), feeds the clean payload stream to
+    the SOI/EOI framer, and drops loss-torn frames on RTP sequence gaps.
+  - **Frame metadata extension contains the JPEG byte size** (verified: 0x1DC6=7622 = emitted
+    frame) and, after a tap-to-focus, **AF-frame coords** (`…AE …74 …24 …24` = x174 y116 36x36
+    in live-view pixels) — ready-made for an AF-box overlay later.
+  - The camera stops pushing after ~1-2 s unless re-requested; the streamer re-requests on a
+    1.5 s idle gap (up to 3, then full retry). **Wi-Fi power save was the big stutter cause**:
+    without a `WifiLock` (FULL_LOW_LATENCY) + `MulticastLock` (needs
+    `CHANGE_WIFI_MULTICAST_STATE`), Android buffers the UDP stream and delivers it in bursts.
+    Both locks are now held during streaming for every camera.
+  - `stopliveview` returns 520 on the PEN (harmless — the stream stops anyway; the call is
+    best-effort).
+  - **Exposure:** `desclist` in rec mode gives live ISO/Aperture/Shutter/EV (CamPropParser).
+    **`set_camprop.cgi?com=set&propname=X` POSTs `<set><value>V</value></set>` as text/xml —
+    verified working.** Steppers step through the camera's own enums; a set is confirmed via a
+    ~60 B single-property GET (`get_camprop.cgi?com=get&propname=X` → `<get><value>V</value>`),
+    buttons lock until the camera confirms. Mode gating: shutter settable only in S/M, aperture
+    only in A/M (a shutter set in A mode returns `errorcode 3001`).
+  - Shutter (`exec_takemotion.cgi?com=starttake`) and tap-to-focus (`com=assignafframe&point=
+    0160x0120` in live-view pixel coords) both verified. AF coordinate space = live-view pixels
+    (320x240 at our lvqty).
+  - **Movie recording DESCOPED** (REC greyed out via `supportsVideoRecord=false`):
+    `startmovie`/`stopmovie` → `errorcode 1004` (not implemented); `starttake` in movie mode
+    accepts but never replies (hangs the HTTP call) and doesn't record. `set takemode=movie`
+    works fine. Revisit with an OI.Share traffic capture.
+  - **Aperture reading quirk:** the PEN's focalvalue enum has no f/1.7 step (1.6→1.8), so an
+    f/1.7 lens wide-open reports f/1.6 — camera-side rounding, not an app bug.
+  - **Double window-inset bug fixed** (`consumeWindowInsets` in the nav host): the per-screen
+    Scaffolds were re-applying the navigation-bar inset on top of the outer Scaffold's bottom-bar
+    padding, double-counting ~200 px and crushing/clipping the bottom of every screen (the
+    "white dots" under the shutter button = vertically clipped hint text). Affected the GX80 too.
+  - PEN status surface (battery/SD) still unmapped — fetchStatus reports mode only, read-outs
+    show "—". Candidates for a future probe: single-property gets.
 
 ## Sources
 - Lumix GX80 protocol: https://github.com/cleverfox/lumixproto

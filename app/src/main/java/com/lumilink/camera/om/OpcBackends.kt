@@ -13,9 +13,12 @@ import com.lumilink.data.PhotoDownloader
 import com.lumilink.model.CameraExposure
 import com.lumilink.model.CameraPhoto
 import com.lumilink.model.CameraStatus
+import com.lumilink.model.SettableProp
 import com.lumilink.model.CameraType
+import com.lumilink.network.CamPropParser
 import com.lumilink.network.CameraException
 import com.lumilink.network.OpcClient
+import com.lumilink.network.RtpJpegAssembler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -105,35 +108,207 @@ private class OpcConnection(
     }
 }
 
-/** Placeholder until Milestone 3 — shutter/live view/exposure over the OPC control CGIs. */
+/**
+ * Remote control over the OPC CGIs: `switch_cammode.cgi` (mode), `exec_takemotion.cgi`
+ * (shutter / AF point), `exec_takemisc.cgi` (live view / movie), `get_camprop.cgi`
+ * (exposure properties). Verified verbs so far are the ones from the documented examples;
+ * the PEN's replies (including its errorcode XML) tell us quickly on-device when a guess
+ * is wrong, and every reply of interest is captured as a fixture.
+ */
 private class OpcControl(
+    private val client: OpcClient,
     private val connection: OpcConnection,
+    private val fixtureDir: File?,
 ) : CameraControl {
-    private fun notYet(): Nothing =
-        throw CameraException("OM System PEN remote control arrives in Milestone 3")
+
+    /**
+     * Settable settings as of the last desclist poll (prime on [fetchSettableProps]; the
+     * exposure poll keeps them current).
+     */
+    @Volatile
+    private var settableProps: List<SettableProp> = emptyList()
+
+    /** The camera's takemode as of the last desclist poll — drives stepper gating. */
+    @Volatile
+    private var takemode: String? = null
 
     override suspend fun prepareRecordMode() {
-        // Milestone 1 verification: prove the camera's API answers before failing. This mirrors
-        // the Lumix flow, where the handshake also lives inside prepareRecordMode().
+        // Reachability probe first (mirrors the Lumix flow, where the handshake also lives
+        // inside prepareRecordMode), then switch to record mode. lvqty picks the live-view
+        // resolution (320x240 = the documented example size; the AF point space matches it).
         connection.establishSession()
-        notYet()
+        client.getRaw("switch_cammode.cgi?mode=rec&lvqty=0320x0240")
+        // Give the camera a beat to settle into rec mode before the streamer asks for live view.
+        delay(MODE_SWITCH_DELAY_MS)
     }
-    override suspend fun enterPlaybackMode() = notYet()
-    override suspend fun capture() = notYet()
-    override suspend fun touchAf(x: Int, y: Int) = notYet()
-    override suspend fun startVideoRecord() = notYet()
-    override suspend fun stopVideoRecord() = notYet()
-    override suspend fun fetchStatus(): CameraStatus = notYet()
-    override suspend fun fetchExposure(): CameraExposure = notYet()
-    override suspend fun startLiveViewStream(port: Int) = notYet()
-    override suspend fun stopLiveViewStream() = notYet()
+
+    override suspend fun enterPlaybackMode() {
+        client.getRaw("switch_cammode.cgi?mode=play")
+    }
+
+    override suspend fun capture() {
+        client.getRaw("exec_takemotion.cgi?com=starttake")
+    }
+
+    /**
+     * Touch-to-focus at ([x], [y]) in the interface's 0..1000 space, mapped into the live view's
+     * pixel coordinates (320x240 at our lvqty) as the camera expects (`point=0160x0120` style).
+     */
+    override suspend fun touchAf(x: Int, y: Int) {
+        val px = (x * LIVE_VIEW_WIDTH / 1000).coerceIn(0, LIVE_VIEW_WIDTH)
+        val py = (y * LIVE_VIEW_HEIGHT / 1000).coerceIn(0, LIVE_VIEW_HEIGHT)
+        client.getRaw("exec_takemotion.cgi?com=assignafframe&point=${"%04d".format(px)}x${"%04d".format(py)}")
+    }
+
+    /**
+     * Remote movie recording is descoped for the PEN. On-device probing found no working verb:
+     * `startmovie`/`stopmovie` return errorcode 1004 (not implemented), and `starttake` in
+     * movie mode accepts the connection but never replies (hangs the HTTP channel) without
+     * recording. Findings in docs/PROJECT_CONTEXT.md; revisit with an OI.Share traffic
+     * capture (M4's tooling) if this becomes a must-have.
+     */
+    override suspend fun startVideoRecord() =
+        throw CameraException("Remote video recording isn't supported on this camera yet")
+
+    override suspend fun stopVideoRecord() {
+        // Nothing to stop — startVideoRecord always refuses.
+    }
+
+    /**
+     * The PEN's readable status surface isn't mapped yet (battery/SD unknown — probed on-device
+     * later). Mode comes from our own tracking. Unknown fields stay null and the UI shows "—".
+     */
+    override suspend fun fetchStatus(): CameraStatus =
+        CameraStatus(mode = "rec")
+
+    /**
+     * Fetch the full property list and map the exposure read-outs from it. The PEN reports
+     * ISO (`isospeedvalue`), aperture (`focalvalue`), shutter (`shutspeedvalue`) and exposure
+     * compensation (`expcomp`) with live values — everything the GX80 refused to expose.
+     * The desclist body is captured once as a fixture for offline parser work.
+     */
+    override suspend fun fetchSettableProps(): List<SettableProp> {
+        if (settableProps.isEmpty()) {
+            // Prime the cache with a fresh desclist (the exposure poll keeps it current).
+            exposureFrom(client.getRaw(DESCLIST_QUERY))
+        }
+        return settableProps
+    }
+
+    override suspend fun setProp(prop: SettableProp, value: String): String? {
+        require(value in prop.options) { "$value is not one of the camera's allowed values" }
+        client.postRaw("set_camprop.cgi?com=set&propname=${prop.name}", value)
+        // Confirm with a single-property get (~60 B) instead of the full desclist, so the UI
+        // round-trip stays snappy; a rejected set simply reports the unchanged value.
+        val confirmed = client.tryGet("get_camprop.cgi?com=get&propname=${prop.name}")
+        if (confirmed.first != 200) return null
+        return VALUE_REGEX.find(confirmed.second)?.groupValues?.getOrNull(1)
+    }
+
+    override suspend fun fetchExposure(): CameraExposure {
+        val body = client.getRaw("get_camprop.cgi?com=desc&propname=desclist")
+        if (!desclistCaptured) {
+            desclistCaptured = true
+            val dir = fixtureDir ?: return exposureFrom(body)
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    dir.mkdirs()
+                    File(dir, "desclist_rec.xml").writeText(body)
+                }
+                Log.i(TAG, "Captured desclist_rec.xml (${body.length} chars)")
+            }
+        }
+        return exposureFrom(body)
+    }
+
+    override suspend fun startLiveViewStream(port: Int) {
+        client.getRaw("exec_takemisc.cgi?com=startliveview&port=$port")
+    }
+
+    override suspend fun stopLiveViewStream() {
+        runCatching { client.getRaw("exec_takemisc.cgi?com=stopliveview") }
+            .onFailure { Log.i(TAG, "stopliveview failed (ignored): ${it.message}") }
+    }
+
+    private var desclistCaptured = false
+
+    /** Builds the exposure read-out from a desclist body; unknown fields stay null. */
+    private fun exposureFrom(desclistBody: String): CameraExposure {
+        val props = CamPropParser.parseDesclist(desclistBody).associateBy { it.name }
+        takemode = props["takemode"]?.value ?: takemode
+        settableProps = SETTABLE_PROPS.mapNotNull { (name, displayName) ->
+            val prop = props[name] ?: return@mapNotNull null
+            if (!prop.canSet || prop.options.isEmpty()) return@mapNotNull null
+            SettableProp(
+                name = prop.name,
+                displayName = displayName,
+                rawValue = prop.value,
+                displayValue = displayValueOf(prop.name, prop.value),
+                options = prop.options,
+                canAdjust = isAdjustableInMode(name, takemode),
+            )
+        }
+        return CameraExposure(
+            iso = props["isospeedvalue"]?.value,
+            aperture = props["focalvalue"]?.value,
+            shutter = props["shutspeedvalue"]?.value?.let(::formatShutter),
+            exposureComp = props["expcomp"]?.value,
+        )
+    }
+
+    /**
+     * The PEN's shutter values are either plain numbers (denominators: `250` → 1/250s,
+     * `2.5` → 1/2.5s) or seconds with a quote suffix (`60"` → 60s).
+     */
+    private fun formatShutter(value: String): String =
+        if (value.endsWith("\"")) "${value.dropLast(1)}s" else "1/$value"
+
+    companion object {
+        private const val TAG = "OpcControl"
+        private const val MODE_SWITCH_DELAY_MS = 500L
+        private const val LIVE_VIEW_WIDTH = 320
+        private const val LIVE_VIEW_HEIGHT = 240
+        private const val DESCLIST_QUERY = "get_camprop.cgi?com=desc&propname=desclist"
+
+        /** The settings surfaced as steppers, in display order. */
+        private val SETTABLE_PROPS = linkedMapOf(
+            "isospeedvalue" to "ISO",
+            "focalvalue" to "Aperture",
+            "shutspeedvalue" to "Shutter",
+            "expcomp" to "EV",
+        )
+
+        /**
+         * Whether the user can adjust [prop] in the camera's current [takemode]: shutter and
+         * aperture are automatic outside S/M and A/M respectively (the camera rejects such
+         * sets with errorcode 3001 — measured on-device).
+         */
+        private fun isAdjustableInMode(prop: String, takemode: String?): Boolean = when {
+            prop == "shutspeedvalue" -> takemode == "S" || takemode == "M"
+            prop == "focalvalue" -> takemode == "A" || takemode == "M"
+            else -> true
+        }
+
+        /** Pulls the value out of a single-property get_camprop reply. */
+        private val VALUE_REGEX = Regex("<value>([^<]+)</value>")
+
+        /** Formats a property value for display (wire value in, pretty value out). */
+        private fun displayValueOf(name: String, value: String): String = when (name) {
+            "focalvalue" -> "f/$value"
+            "shutspeedvalue" ->
+                if (value.endsWith("\"")) "${value.dropLast(1)}s" else "1/$value"
+            else -> value
+        }
+    }
 }
 
 /**
  * Live-view port: 37789 is the port used in the documented OPC examples; the PEN's actual
  * value (and frame format) is confirmed on-device in Milestone 3.
  */
-private data class OpcLiveViewConfig(override val port: Int = DEFAULT_PORT) : LiveViewConfig {
+private class OpcLiveViewConfig(override val port: Int = DEFAULT_PORT) : LiveViewConfig {
+    override fun newFrameAssembler() = RtpJpegAssembler()
+
     private companion object {
         const val DEFAULT_PORT = 37789
     }
@@ -159,14 +334,16 @@ private class OpcDownloadProfile : DownloadProfile {
 fun opcBackends(context: Context, mediaStoreSaver: MediaStoreSaver): CameraBackends {
     val client = OpcClient()
     val downloadProfile = OpcDownloadProfile()
-    val connection = OpcConnection(client, File(context.filesDir, "opc_fixtures"))
+    val fixtureDir = File(context.filesDir, "opc_fixtures")
+    val connection = OpcConnection(client, fixtureDir)
     return CameraBackends(
         type = CameraType.OM_SYSTEM_PEN,
         connection = connection,
         photoLister = OpcPhotoLister(client),
-        control = OpcControl(connection),
+        control = OpcControl(client, connection, fixtureDir),
         liveView = OpcLiveViewConfig(),
         downloadProfile = downloadProfile,
         photoDownloader = PhotoDownloader(mediaStoreSaver, downloadProfile),
+        supportsVideoRecord = false, // no working movie verb found — see OpcControl.startVideoRecord
     )
 }

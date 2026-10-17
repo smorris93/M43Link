@@ -13,7 +13,10 @@ import com.lumilink.model.CameraExposure
 import com.lumilink.model.CameraPhoto
 import com.lumilink.model.CameraStatus
 import com.lumilink.model.CameraType
+import com.lumilink.model.SettableProp
 import com.lumilink.network.CameraClient
+import com.lumilink.network.CameraException
+import com.lumilink.network.OneDatagramJpegAssembler
 
 /**
  * The Lumix GX80's protocol implementation — thin delegation onto the existing, proven
@@ -50,10 +53,18 @@ private class LumixControl(private val client: CameraClient) : CameraControl {
     override suspend fun fetchExposure(): CameraExposure = client.fetchExposure()
     override suspend fun startLiveViewStream(port: Int) = client.startStream(port)
     override suspend fun stopLiveViewStream() = client.stopStream()
+
+    /** The GX80 exposes no settable settings over Wi-Fi (dial-controlled in Manual mode). */
+    override suspend fun fetchSettableProps(): List<SettableProp> = emptyList()
+
+    override suspend fun setProp(prop: SettableProp, value: String): String? =
+        throw CameraException("This camera doesn't expose settable settings over Wi-Fi")
 }
 
 /** The GX80 pushes live view to port 49152, one full JPEG per UDP datagram. */
-private data class LumixLiveViewConfig(override val port: Int = DEFAULT_PORT) : LiveViewConfig {
+private class LumixLiveViewConfig(override val port: Int = DEFAULT_PORT) : LiveViewConfig {
+    override fun newFrameAssembler() = OneDatagramJpegAssembler()
+
     private companion object {
         const val DEFAULT_PORT = 49152
     }

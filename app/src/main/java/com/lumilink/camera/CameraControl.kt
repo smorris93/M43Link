@@ -2,6 +2,7 @@ package com.lumilink.camera
 
 import com.lumilink.model.CameraExposure
 import com.lumilink.model.CameraStatus
+import com.lumilink.model.SettableProp
 
 /**
  * Remote control of a camera: mode switching, shutter, autofocus, video, status/exposure
@@ -47,4 +48,16 @@ interface CameraControl {
 
     /** Best-effort stop of the live-view stream (some bodies don't expose it; ignore failures). */
     suspend fun stopLiveViewStream()
+
+    /**
+     * Settings this camera lets the user change remotely, with their current values and the
+     * camera's own allowed values. Empty for bodies that expose nothing settable (the GX80).
+     */
+    suspend fun fetchSettableProps(): List<SettableProp>
+
+    /**
+     * Applies [value] to [prop] and returns the camera's *confirmed* current value for the
+     * property afterwards (a rejected set comes back unchanged), or null if unknown.
+     */
+    suspend fun setProp(prop: SettableProp, value: String): String?
 }

@@ -16,4 +16,6 @@ class CameraBackends(
     val liveView: LiveViewConfig,
     val downloadProfile: DownloadProfile,
     val photoDownloader: PhotoDownloader,
+    /** False when this camera's video recording can't be driven remotely (the PEN, for now). */
+    val supportsVideoRecord: Boolean = true,
 )

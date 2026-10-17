@@ -8,6 +8,7 @@ import com.lumilink.data.CameraCredentialsStore
 import com.lumilink.data.MediaStoreSaver
 import com.lumilink.model.CameraType
 import com.lumilink.network.CameraNetworkManager
+import com.lumilink.network.CameraWifiLocks
 
 /**
  * Manual dependency-injection container — plain, greppable wiring instead of an annotation
@@ -23,6 +24,9 @@ import com.lumilink.network.CameraNetworkManager
 class AppContainer(context: Context) {
     val credentialsStore: CameraCredentialsStore = CameraCredentialsStore(context)
     val cameraNetworkManager: CameraNetworkManager = CameraNetworkManager(context)
+
+    /** Held while the live-view stream runs (see CameraWifiLocks). */
+    val cameraWifiLocks: CameraWifiLocks = CameraWifiLocks(context)
 
     private val mediaStoreSaver: MediaStoreSaver = MediaStoreSaver(context)
 

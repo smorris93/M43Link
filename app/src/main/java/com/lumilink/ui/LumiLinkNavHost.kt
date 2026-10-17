@@ -1,5 +1,6 @@
 package com.lumilink.ui
 
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CenterFocusStrong
@@ -91,7 +92,12 @@ fun LumiLinkNavHost() {
         NavHost(
             navController = navController,
             startDestination = Routes.CONNECT,
-            modifier = Modifier.padding(padding),
+            // consumeWindowInsets first: without it, the per-screen Scaffolds also apply the
+            // system navigation-bar inset on top of this padding, double-counting ~200px at
+            // the bottom and crushing/clipping the lowest elements (measured on-device).
+            modifier = Modifier
+                .consumeWindowInsets(padding)
+                .padding(padding),
         ) {
             composable(Routes.CONNECT) { ConnectScreen() }
             composable(Routes.CONTROL) { ControlScreen() }

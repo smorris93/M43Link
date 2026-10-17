@@ -2,8 +2,10 @@ package com.lumilink.network
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 /**
@@ -36,9 +38,31 @@ class OpcClient(
         httpClient.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw CameraException("Camera returned HTTP ${response.code}")
+                throw CameraException("Camera returned HTTP ${response.code}: ${body.take(60)}")
             }
             body
+        }
+    }
+
+    /**
+     * Sets a camera property (`set_camprop.cgi?com=set&propname=…`) with the POST body shape
+     * verified against working implementations: `<set><value>VALUE</value></set>` as text/xml.
+     */
+    suspend fun postRaw(pathAndQuery: String, value: String): String = withContext(Dispatchers.IO) {
+        val body = "<set><value>$value</value></set>"
+            .toRequestBody("text/xml; charset=ISO-8859-1".toMediaType())
+        val request = Request.Builder()
+            .url("$baseUrl/$pathAndQuery")
+            .header("User-Agent", USER_AGENT)
+            .header("Connection", "Keep-Alive")
+            .post(body)
+            .build()
+        httpClient.newCall(request).execute().use { response ->
+            val reply = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw CameraException("Camera returned HTTP ${response.code}: ${reply.take(60)}")
+            }
+            reply
         }
     }
 

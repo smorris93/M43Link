@@ -21,6 +21,10 @@
     <!-- Foreground service keeps the camera network bound during transfers/live view. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Wi-Fi/multicast locks while the live-view UDP stream runs: without them Android's
+         Wi-Fi power save buffers the camera's packets and the view stutters. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- Needed to show the ongoing-connection notification on Android 13+. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 

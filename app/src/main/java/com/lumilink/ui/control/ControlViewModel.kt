@@ -14,7 +14,9 @@ import com.lumilink.camera.LiveViewConfig
 import com.lumilink.di.AppContainer
 import com.lumilink.model.CameraExposure
 import com.lumilink.model.CameraStatus
+import com.lumilink.model.SettableProp
 import com.lumilink.network.CameraException
+import com.lumilink.network.CameraWifiLocks
 import com.lumilink.network.LiveViewStreamer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -36,6 +38,9 @@ import kotlinx.coroutines.launch
 class ControlViewModel(
     private val control: CameraControl,
     private val liveView: LiveViewConfig,
+    wifiLocks: CameraWifiLocks?,
+    /** Whether this camera supports remote video recording (REC greys out otherwise). */
+    val supportsVideoRecord: Boolean = true,
 ) : ViewModel() {
 
     data class UiState(
@@ -45,6 +50,8 @@ class ControlViewModel(
         val liveViewActive: Boolean = false,
         val status: CameraStatus = CameraStatus.UNKNOWN,
         val exposure: CameraExposure = CameraExposure.UNKNOWN,
+        /** Remote-settable settings (ISO/aperture/shutter/EV on the PEN; empty on the GX80). */
+        val settableProps: List<SettableProp> = emptyList(),
         val busy: Boolean = false,
         /** Transient one-shot text for a snackbar (capture confirmation, errors). */
         val message: String? = null,
@@ -59,9 +66,10 @@ class ControlViewModel(
     private val _liveFrame = MutableStateFlow<ImageBitmap?>(null)
     val liveFrame: StateFlow<ImageBitmap?> = _liveFrame.asStateFlow()
 
-    private val streamer = LiveViewStreamer(control)
+    private val streamer = LiveViewStreamer(control, liveView, wifiLocks)
     private var pollJob: Job? = null
     private var streamJob: Job? = null
+    private var decodeFailures = 0
 
     /** Called when the Control screen becomes visible. Enters record mode, polls state, streams live view. */
     fun start() {
@@ -100,7 +108,8 @@ class ControlViewModel(
                 }
                 try {
                     val exposure = control.fetchExposure()
-                    _uiState.update { it.copy(exposure = exposure) }
+                    val props = control.fetchSettableProps()
+                    _uiState.update { it.copy(exposure = exposure, settableProps = props) }
                 } catch (e: Exception) {
                     Log.i(TAG, "exposure poll failed: ${e.message}")
                 }
@@ -128,7 +137,7 @@ class ControlViewModel(
         streamJob = viewModelScope.launch {
             while (isActive) {
                 try {
-                    streamer.run(liveView.port) { frame -> onLiveFrame(frame) }
+                    streamer.run { frame -> onLiveFrame(frame) }
                 } catch (e: Exception) {
                     Log.i(TAG, "live view stream error (will retry): ${e.message}")
                     _uiState.update { it.copy(liveViewActive = false) }
@@ -140,7 +149,14 @@ class ControlViewModel(
 
     /** Decode a JPEG frame to a bitmap on the streamer's IO thread and publish it. */
     private fun onLiveFrame(jpeg: ByteArray) {
-        val bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return
+        val bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+        if (bitmap == null) {
+            if (decodeFailures < 3) {
+                decodeFailures++
+                Log.w(TAG, "live frame failed to decode (${jpeg.size}B) - corrupt assembly?")
+            }
+            return
+        }
         _liveFrame.value = bitmap.asImageBitmap()
         if (!_uiState.value.liveViewActive) _uiState.update { it.copy(liveViewActive = true) }
     }
@@ -169,6 +185,57 @@ class ControlViewModel(
         ) { control.touchAf(x, y) }
     }
 
+    /**
+     * Move [prop] one step ([delta] is -1 or +1) along the camera's own list of allowed
+     * values. The steppers lock while the camera confirms; the displayed value only changes
+     * once the camera agrees — a rejected set leaves everything as it was.
+     */
+    fun adjustProp(prop: SettableProp, delta: Int) {
+        val index = prop.options.indexOf(prop.rawValue)
+        if (index < 0 || _uiState.value.busy || !prop.canAdjust) return
+        val nextIndex = (index + delta).coerceIn(0, prop.options.lastIndex)
+        val next = prop.options[nextIndex]
+        if (next == prop.rawValue) return
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(busy = true) }
+            try {
+                val confirmed = control.setProp(prop, next)
+                if (confirmed != null) {
+                    val applied = prop.copy(
+                        rawValue = confirmed,
+                        displayValue = formatPropDisplay(prop.name, confirmed),
+                    )
+                    _uiState.update { state ->
+                        state.copy(
+                            settableProps = state.settableProps.map {
+                                if (it.name == prop.name) applied else it
+                            },
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "set ${prop.displayName} failed: ${e.message}")
+                _uiState.update {
+                    it.copy(message = "Couldn't set ${prop.displayName} — the camera kept ${prop.displayValue}")
+                }
+            } finally {
+                _uiState.update { it.copy(busy = false) }
+            }
+        }
+    }
+
+    /**
+     * Formats a property value for display (wire value in, pretty value out) — same rules as
+     * the Opc backend's read-out (aperture gains f/, quoted shutter values become seconds).
+     */
+    private fun formatPropDisplay(name: String, value: String): String = when (name) {
+        "focalvalue" -> "f/$value"
+        "shutspeedvalue" ->
+            if (value.endsWith("\"")) "${value.dropLast(1)}s" else "1/$value"
+        else -> value
+    }
+
     fun toggleVideoRecord() {
         if (_uiState.value.videoRecording) {
             runCommand("Recording stopped") { control.stopVideoRecord() }
@@ -182,7 +249,7 @@ class ControlViewModel(
      * [errorMapper] can turn a raw failure message into friendlier text (return null to keep raw).
      */
     private fun runCommand(
-        successMessage: String,
+        successMessage: String?,
         errorMapper: (String) -> String? = { null },
         command: suspend () -> Unit,
     ) {
@@ -215,7 +282,12 @@ class ControlViewModel(
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val backends = container.backends()
-                ControlViewModel(backends.control, backends.liveView)
+                ControlViewModel(
+                    backends.control,
+                    backends.liveView,
+                    container.cameraWifiLocks,
+                    backends.supportsVideoRecord,
+                )
             }
         }
     }
