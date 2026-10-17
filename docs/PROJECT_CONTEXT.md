@@ -162,6 +162,24 @@ connects to the Mac by USB (adb occasionally drops — `adb kill-server && adb s
 1. Aperture & shutter read-out (would need P/A/S modes or deeper stream-header work — uncertain).
 2. Wi-Fi scan/pick UI, ktlint in Gradle, RAW+JPEG pair handling, optional MVP1 warmer-pause-on-scroll.
 
+## OM System PEN support (branch `om_system_pen_support`, started 2026-10-17)
+Plan with milestones: [`docs/OM_SYSTEM_PEN_PLAN.md`](OM_SYSTEM_PEN_PLAN.md). Protocol research:
+OPC (Olympus) HTTP CGIs at `192.168.0.10` (`get_imglist.cgi`, `get/set_camprop.cgi`,
+`exec_takemotion.cgi`, `exec_takemisc.cgi`), UDP live view, OIS1/OIS3 QR pairing format; best
+reference implementations are `dpolarov/olympus-view-and-delete` (transfer, active) and
+`ccrome/olympus-omd-remote-control` (contains the leaked `OPC_Communication_Protocol_EN_1.0a`
+spec). PEN protocol not yet verified on hardware — Milestone 1 probes it.
+
+- **Phase 0 (done, verified on-device 2026-10-17):** multi-camera refactor. New `com.lumilink.camera`
+  package holds backend seams (`CameraConnection`, `PhotoLister`, `CameraControl`,
+  `LiveViewConfig`, `DownloadProfile`, `CameraBackends`); `camera/lumix/LumixBackends.kt` is the
+  whole GX80 implementation. ViewModels depend on interfaces only. Credentials are stored per
+  camera type (`ssid_<TYPE>` keys; legacy single-camera keys still read as the Lumix's —
+  existing installs keep working). Connect tab gained a camera-type selector; types without a
+  backend (PEN until M1) have Connect disabled. GX80 regression passed: pair → record mode →
+  live view (178B-header frames) → ISO/status read-outs all confirmed on the phone.
+  Gallery browse/download is delegation-only and wasn't device-tested (card removed from GX80).
+
 ## Sources
 - Lumix GX80 protocol: https://github.com/cleverfox/lumixproto
 - libgphoto2 Lumix HTTP/Wifi protocol thread: https://github.com/gphoto/libgphoto2/issues/409

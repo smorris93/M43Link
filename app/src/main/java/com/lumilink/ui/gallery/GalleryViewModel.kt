@@ -5,8 +5,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.lumilink.camera.PhotoLister
 import com.lumilink.data.PhotoDownloader
-import com.lumilink.data.PhotoRepository
 import com.lumilink.di.AppContainer
 import com.lumilink.model.CameraPhoto
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,7 +23,7 @@ enum class SortOrder { NEWEST, OLDEST }
  * itself is lazy (only visible thumbnails load), so no manual paging is needed.
  */
 class GalleryViewModel(
-    private val photoRepository: PhotoRepository,
+    private val photoLister: PhotoLister,
     private val photoDownloader: PhotoDownloader,
 ) : ViewModel() {
 
@@ -59,14 +59,14 @@ class GalleryViewModel(
      */
     fun onScreenEntered() {
         if (_uiState.value.allPhotos.isEmpty()) return
-        viewModelScope.launch { runCatching { photoRepository.ensurePlaybackMode() } }
+        viewModelScope.launch { runCatching { photoLister.ensurePlaybackMode() } }
     }
 
     fun load() {
         _uiState.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
             try {
-                val photos = photoRepository.listPhotos()
+                val photos = photoLister.listPhotos()
                 _uiState.update { it.copy(loading = false, allPhotos = photos) }
             } catch (e: Exception) {
                 _uiState.update { it.copy(loading = false, error = e.message ?: "Couldn't load photos") }
@@ -142,7 +142,8 @@ class GalleryViewModel(
     companion object {
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {
-                GalleryViewModel(container.photoRepository, container.photoDownloader)
+                val backends = container.backends()
+                GalleryViewModel(backends.photoLister, backends.photoDownloader)
             }
         }
     }

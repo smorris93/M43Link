@@ -1,6 +1,7 @@
 package com.lumilink.data
 
 import android.util.Log
+import com.lumilink.camera.DownloadProfile
 import com.lumilink.model.CameraPhoto
 import com.lumilink.network.CameraException
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +17,7 @@ import java.util.concurrent.TimeUnit
  */
 class PhotoDownloader(
     private val mediaStoreSaver: MediaStoreSaver,
+    private val downloadProfile: DownloadProfile,
     private val httpClient: OkHttpClient = defaultHttpClient(),
 ) {
 
@@ -52,7 +54,7 @@ class PhotoDownloader(
                 val totalBytes = photo.sizeBytes ?: body.contentLength().takeIf { it > 0 }
 
                 val filename = fileNameFor(photo)
-                val mimeType = if (photo.isRaw) "image/x-panasonic-rw2" else "image/jpeg"
+                val mimeType = downloadProfile.mimeTypeFor(photo)
 
                 mediaStoreSaver.save(filename, mimeType, asDownload = photo.isRaw) { output ->
                     body.byteStream().use { input ->
@@ -74,7 +76,7 @@ class PhotoDownloader(
         }
 
     private fun fileNameFor(photo: CameraPhoto): String {
-        val extension = if (photo.isRaw) "rw2" else "jpg"
+        val extension = downloadProfile.fileExtensionFor(photo)
         return "${photo.title}.$extension"
     }
 

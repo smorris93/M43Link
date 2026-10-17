@@ -9,10 +9,11 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.lumilink.camera.CameraControl
+import com.lumilink.camera.LiveViewConfig
 import com.lumilink.di.AppContainer
 import com.lumilink.model.CameraExposure
 import com.lumilink.model.CameraStatus
-import com.lumilink.network.CameraClient
 import com.lumilink.network.LiveViewStreamer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -32,7 +33,8 @@ import kotlinx.coroutines.launch
  * so we don't hammer the camera while the user is on another tab.
  */
 class ControlViewModel(
-    private val cameraClient: CameraClient,
+    private val control: CameraControl,
+    private val liveView: LiveViewConfig,
 ) : ViewModel() {
 
     data class UiState(
@@ -56,7 +58,7 @@ class ControlViewModel(
     private val _liveFrame = MutableStateFlow<ImageBitmap?>(null)
     val liveFrame: StateFlow<ImageBitmap?> = _liveFrame.asStateFlow()
 
-    private val streamer = LiveViewStreamer(cameraClient)
+    private val streamer = LiveViewStreamer(control)
     private var pollJob: Job? = null
     private var streamJob: Job? = null
 
@@ -66,10 +68,9 @@ class ControlViewModel(
         if (pollJob?.isActive == true) return
         pollJob = viewModelScope.launch {
             try {
-                // The camera only accepts commands after the access-control handshake; pair() is
-                // idempotent (a prior session returns already-connected), so it's safe every time.
-                cameraClient.pair()
-                cameraClient.enterRecordMode()
+                // Handshake + record mode in one idempotent call (the backend pairs if the camera
+                // needs it, and re-asserting is harmless on a camera that's already there).
+                control.prepareRecordMode()
                 _uiState.update { it.copy(recordModeReady = true) }
             } catch (e: Exception) {
                 // The camera may be asleep or still in playback; surface it but keep polling so a
@@ -81,7 +82,7 @@ class ControlViewModel(
             }
             while (isActive) {
                 try {
-                    val status = cameraClient.fetchStatus()
+                    val status = control.fetchStatus()
                     _uiState.update {
                         // A successful poll implies record mode is live even if the earlier switch errored.
                         it.copy(status = status, recordModeReady = it.recordModeReady || status.mode == "rec")
@@ -90,7 +91,7 @@ class ControlViewModel(
                     Log.i(TAG, "status poll failed: ${e.message}")
                 }
                 try {
-                    val exposure = cameraClient.fetchExposure()
+                    val exposure = control.fetchExposure()
                     _uiState.update { it.copy(exposure = exposure) }
                 } catch (e: Exception) {
                     Log.i(TAG, "exposure poll failed: ${e.message}")
@@ -119,7 +120,7 @@ class ControlViewModel(
         streamJob = viewModelScope.launch {
             while (isActive) {
                 try {
-                    streamer.run { frame -> onLiveFrame(frame) }
+                    streamer.run(liveView.port) { frame -> onLiveFrame(frame) }
                 } catch (e: Exception) {
                     Log.i(TAG, "live view stream error (will retry): ${e.message}")
                     _uiState.update { it.copy(liveViewActive = false) }
@@ -136,7 +137,7 @@ class ControlViewModel(
         if (!_uiState.value.liveViewActive) _uiState.update { it.copy(liveViewActive = true) }
     }
 
-    fun capture() = runCommand("Captured") { cameraClient.capture() }
+    fun capture() = runCommand("Captured") { control.capture() }
 
     /** AF button: focus at the centre via touch AF (the GX80 rejects the blind oneshot_af command). */
     fun autofocus() = focusAt(0.5f, 0.5f)
@@ -157,14 +158,14 @@ class ControlViewModel(
                     null
                 }
             },
-        ) { cameraClient.touchAf(x, y) }
+        ) { control.touchAf(x, y) }
     }
 
     fun toggleVideoRecord() {
         if (_uiState.value.videoRecording) {
-            runCommand("Recording stopped") { cameraClient.stopVideoRecord() }
+            runCommand("Recording stopped") { control.stopVideoRecord() }
         } else {
-            runCommand("Recording started") { cameraClient.startVideoRecord() }
+            runCommand("Recording started") { control.startVideoRecord() }
         }
     }
 
@@ -205,7 +206,8 @@ class ControlViewModel(
 
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {
-                ControlViewModel(container.cameraClient)
+                val backends = container.backends()
+                ControlViewModel(backends.control, backends.liveView)
             }
         }
     }

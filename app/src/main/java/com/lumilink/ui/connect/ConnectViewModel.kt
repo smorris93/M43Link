@@ -8,20 +8,24 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.lumilink.di.AppContainer
 import com.lumilink.data.CameraCredentialsStore
 import com.lumilink.model.CameraCredentials
+import com.lumilink.model.CameraType
 import com.lumilink.model.ConnectionState
 import com.lumilink.network.CameraNetworkManager
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
- * Holds the Connect screen's state and actions. The UI observes [connectionState] and
- * [savedCredentials]; it never touches the network layer directly.
+ * Holds the Connect screen's state and actions: which camera type is selected, its saved
+ * credentials, and the live connection state. The UI never touches the network layer directly.
  *
  * Kotlin/Android note: a `ViewModel` survives configuration changes (e.g. screen rotation).
  * `viewModelScope` is a coroutine scope automatically cancelled when the ViewModel is cleared.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class ConnectViewModel(
     private val networkManager: CameraNetworkManager,
     private val credentialsStore: CameraCredentialsStore,
@@ -30,20 +34,33 @@ class ConnectViewModel(
     /** Live connection state from the network manager, surfaced straight to the UI. */
     val connectionState: StateFlow<ConnectionState> = networkManager.state
 
-    /**
-     * The last saved camera, or null. `stateIn` converts the store's cold Flow into a hot
-     * StateFlow with an always-available current value for the UI to prefill fields.
-     */
-    val savedCredentials: StateFlow<CameraCredentials?> = credentialsStore.credentials.stateIn(
+    /** The camera type selected on this screen (persisted; defaults to the Lumix). */
+    val selectedCameraType: StateFlow<CameraType> = credentialsStore.selectedCameraType.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = null,
+        initialValue = credentialsStore.currentCameraType(),
     )
 
-    /** Save the entered credentials and start connecting. */
+    /**
+     * The selected camera's saved credentials, or null. Switching camera type re-emits that
+     * camera's own saved credentials so the fields prefill per camera.
+     */
+    val savedCredentials: StateFlow<CameraCredentials?> = selectedCameraType
+        .flatMapLatest { credentialsStore.credentialsFor(it) }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = null,
+        )
+
+    fun selectCameraType(type: CameraType) {
+        viewModelScope.launch { credentialsStore.selectCameraType(type) }
+    }
+
+    /** Save the entered credentials for the selected camera and start connecting. */
     fun connect(ssid: String, passphrase: String) {
         val credentials = CameraCredentials(ssid.trim(), passphrase)
-        viewModelScope.launch { credentialsStore.save(credentials) }
+        viewModelScope.launch { credentialsStore.save(selectedCameraType.value, credentials) }
         networkManager.connect(credentials)
     }
 

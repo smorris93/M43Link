@@ -23,6 +23,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -40,13 +43,15 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.lumilink.model.CameraType
 import com.lumilink.model.ConnectionState
 import com.lumilink.ui.appContainer
 
 /**
- * Connect screen — enter the camera hotspot's SSID + password (prefilled once saved), request the
- * Wi-Fi permission if needed, then connect. Navigation to Control/Photos is driven by the parent
- * nav host reacting to the connection state; this screen just connects and disconnects.
+ * Connect screen — pick the camera type, enter that camera hotspot's SSID + password (prefilled
+ * once saved), request the Wi-Fi permission if needed, then connect. Navigation to
+ * Control/Photos is driven by the parent nav host reacting to the connection state; this screen
+ * just connects and disconnects.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,11 +61,12 @@ fun ConnectScreen() {
 
     val state by viewModel.connectionState.collectAsStateWithLifecycle()
     val saved by viewModel.savedCredentials.collectAsStateWithLifecycle()
+    val cameraType by viewModel.selectedCameraType.collectAsStateWithLifecycle()
 
     var ssid by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
 
-    // Prefill fields from saved credentials the first time they load (don't clobber user edits).
+    // Prefill fields from the selected camera's saved credentials (don't clobber user edits).
     LaunchedEffect(saved) {
         val savedCreds = saved
         if (savedCreds != null && ssid.isBlank()) {
@@ -69,6 +75,16 @@ fun ConnectScreen() {
         }
     }
 
+    // Switching camera type starts a fresh credential set (fields re-prefill from that camera's
+    // own saved values via the effect above).
+    fun selectCameraType(type: CameraType) {
+        if (type == cameraType) return
+        ssid = ""
+        password = ""
+        viewModel.selectCameraType(type)
+    }
+
+    val typeSupported = container.isSupported(cameraType)
     val connected = state is ConnectionState.Connected
     val context = LocalContext.current
     // Connecting to a Wi-Fi network with a specifier requires this runtime permission:
@@ -109,6 +125,18 @@ fun ConnectScreen() {
         ) {
             ConnectionStatusCard(state)
 
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                CameraType.entries.forEachIndexed { index, type ->
+                    SegmentedButton(
+                        selected = type == cameraType,
+                        onClick = { selectCameraType(type) },
+                        shape = SegmentedButtonDefaults.itemShape(index, CameraType.entries.size),
+                    ) {
+                        Text(type.displayName)
+                    }
+                }
+            }
+
             OutlinedTextField(
                 value = ssid,
                 onValueChange = { ssid = it },
@@ -138,7 +166,7 @@ fun ConnectScreen() {
                 Button(
                     // Password is optional — the camera hotspot may be an open network.
                     onClick = attemptConnect,
-                    enabled = !connecting && ssid.isNotBlank(),
+                    enabled = !connecting && typeSupported && ssid.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(if (connecting) "Connecting…" else "Connect to camera")
@@ -147,15 +175,31 @@ fun ConnectScreen() {
 
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "On the camera: Wi-Fi → New Connection → Remote Shooting & View, then enter " +
-                    "that hotspot's name here. Leave the password blank if the camera doesn't show " +
-                    "one. The first connection shows a one-time Android prompt; after that it " +
-                    "connects automatically.",
+                text = setupInstructions(cameraType, supported = typeSupported),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
+}
+
+/** Per-camera setup text shown under the connect button. */
+private fun setupInstructions(type: CameraType, supported: Boolean): String = when (type) {
+    CameraType.LUMIX_GX80 ->
+        "On the camera: Wi-Fi → New Connection → Remote Shooting & View, then enter " +
+            "that hotspot's name here. Leave the password blank if the camera doesn't show " +
+            "one. The first connection shows a one-time Android prompt; after that it " +
+            "connects automatically."
+    CameraType.OM_SYSTEM_PEN ->
+        if (supported) {
+            "On the camera: Wi-Fi Settings → Private, then launch the Wi-Fi and enter the " +
+                "hotspot's name and password here. The first connection shows a one-time " +
+                "Android prompt; after that it connects automatically."
+        } else {
+            "OM System PEN support is on the way (Milestone 1 of the PEN plan). Connect will " +
+                "unlock once the PEN backend is implemented. On the camera, Wi-Fi Settings → " +
+                "Private is the mode it will use."
+        }
 }
 
 /** Small status banner reflecting the current [ConnectionState]. */
