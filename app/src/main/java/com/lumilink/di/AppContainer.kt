@@ -31,8 +31,8 @@ class AppContainer(context: Context) {
     private val mediaStoreSaver: MediaStoreSaver = MediaStoreSaver(context)
 
     private val backendsByType: Map<CameraType, CameraBackends> = buildMap {
-        put(CameraType.LUMIX_GX80, lumixBackends(mediaStoreSaver))
-        put(CameraType.OM_SYSTEM_PEN, opcBackends(context, mediaStoreSaver))
+        put(CameraType.LUMIX, lumixBackends(mediaStoreSaver))
+        put(CameraType.OM_SYSTEM, opcBackends(context, mediaStoreSaver))
     }
 
     /** True when LumiLink can talk to [type] today (used to gate the Connect button). */

@@ -40,10 +40,28 @@ class CameraCredentialsStore(context: Context) {
     private fun ssidKey(type: CameraType) = stringPreferencesKey("ssid_${type.name}")
     private fun passphraseKey(type: CameraType) = stringPreferencesKey("passphrase_${type.name}")
 
-    /** The selected camera type; defaults to the Lumix (the app's original camera). */
+    /** Keys used by earlier (model-specific) versions, read as a migration fallback. */
+    private fun legacySsidKeys(type: CameraType): List<Preferences.Key<String>> = when (type) {
+        CameraType.LUMIX -> listOf("LUMIX_GX80", "LUMIX")
+        CameraType.OM_SYSTEM -> listOf("OM_SYSTEM_PEN", "OM_SYSTEM")
+    }.map { stringPreferencesKey("ssid_$it") }
+
+    private fun legacyPassphraseKeys(type: CameraType): List<Preferences.Key<String>> = when (type) {
+        CameraType.LUMIX -> listOf("LUMIX_GX80", "LUMIX")
+        CameraType.OM_SYSTEM -> listOf("OM_SYSTEM_PEN", "OM_SYSTEM")
+    }.map { stringPreferencesKey("passphrase_$it") }
+
+    /**
+     * The selected camera type; defaults to the Lumix (the app's original camera). Values
+     * stored by earlier (model-specific) versions map onto the brand-level types.
+     */
     val selectedCameraType: Flow<CameraType> = appContext.dataStore.data.map { prefs ->
-        val stored = prefs[selectedTypeKey]
-        CameraType.entries.firstOrNull { it.name == stored } ?: CameraType.LUMIX_GX80
+        when (prefs[selectedTypeKey]) {
+            "LUMIX_GX80" -> CameraType.LUMIX
+            "OM_SYSTEM_PEN" -> CameraType.OM_SYSTEM
+            else -> CameraType.entries.firstOrNull { it.name == prefs[selectedTypeKey] }
+                ?: CameraType.LUMIX
+        }
     }
 
     /**
@@ -68,11 +86,14 @@ class CameraCredentialsStore(context: Context) {
      */
     fun credentialsFor(type: CameraType): Flow<CameraCredentials?> =
         appContext.dataStore.data.map { prefs ->
+            // Prefer the current key, then any earlier naming, then the very first
+            // single-camera install's bare keys (which belonged to the Lumix).
             val ssid = prefs[ssidKey(type)]
-                // Pre-multi-camera installs saved the Lumix's credentials under the bare keys.
-                ?: prefs[legacySsidKey]?.takeIf { type == CameraType.LUMIX_GX80 }
+                ?: legacySsidKeys(type).firstNotNullOfOrNull { prefs[it] }
+                ?: prefs[legacySsidKey]?.takeIf { type == CameraType.LUMIX }
             val passphrase = prefs[passphraseKey(type)]
-                ?: prefs[legacyPassphraseKey]?.takeIf { type == CameraType.LUMIX_GX80 }
+                ?: legacyPassphraseKeys(type).firstNotNullOfOrNull { prefs[it] }
+                ?: prefs[legacyPassphraseKey]?.takeIf { type == CameraType.LUMIX }
             if (ssid.isNullOrEmpty()) null else CameraCredentials(ssid, passphrase.orEmpty())
         }
 

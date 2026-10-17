@@ -45,7 +45,7 @@ class CameraConnectionService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Connected to camera")
-            .setContentText("LumiLink is holding the Wi-Fi link to your camera.")
+            .setContentText("M43Link is holding the Wi-Fi link to your camera.")
             .setSmallIcon(R.drawable.ic_launcher)
             .setOngoing(true)
             .build()

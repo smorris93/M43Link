@@ -1,7 +1,7 @@
-# LumiLink
+# M43Link
 
-An Android app to **remote-control and transfer photos from a Panasonic Lumix GX80** over the
-camera's own Wi-Fi hotspot.
+An Android app to **remote-control and transfer photos from Panasonic Lumix and OM System
+(Olympus) Micro Four Thirds cameras** over the camera's own Wi-Fi hotspot.
 
 ## Why
 
@@ -21,7 +21,9 @@ and **binds every socket to the camera network**, so the connection holds.
 ## Requirements
 
 - An Android phone running **Android 10 (API 29) or newer** (developed on a Xiaomi 14T Pro).
-- A **Panasonic Lumix GX80** (aka GX85 / GX7 Mark II). Other Lumix bodies may work but are untested.
+- A Panasonic Lumix (verified on the GX80) or an OM System camera (verified on the PEN,
+  Wi-Fi set to Private mode). The protocols are per-brand, so most bodies from either maker
+  should work; model-specific quirks live in the camera backends.
 - A build machine with the toolchain below (no Android Studio required — CLI builds).
 
 ## Tech stack

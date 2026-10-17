@@ -150,7 +150,7 @@ fun ControlScreen() {
                 onCapture = viewModel::capture,
                 onToggleVideo = viewModel::toggleVideoRecord,
             )
-            val hint = if (container.credentialsStore.currentCameraType() == CameraType.LUMIX_GX80) {
+            val hint = if (container.credentialsStore.currentCameraType() == CameraType.LUMIX) {
                 "Tap the live view to focus there; AF focuses the centre. ISO is live; the " +
                     "GX80 doesn't expose aperture/shutter over Wi-Fi in Manual mode."
             } else {

@@ -46,11 +46,11 @@ class MediaStoreSaver(context: Context) {
     ): Uri {
         val (collection, relativePath) = when {
             asVideo -> MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to
-                "${Environment.DIRECTORY_MOVIES}/LumiLink"
+                "${Environment.DIRECTORY_MOVIES}/M43Link"
             asDownload -> MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to
-                "${Environment.DIRECTORY_DOWNLOADS}/LumiLink"
+                "${Environment.DIRECTORY_DOWNLOADS}/M43Link"
             else -> MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to
-                "${Environment.DIRECTORY_PICTURES}/LumiLink"
+                "${Environment.DIRECTORY_PICTURES}/M43Link"
         }
 
         val pending = ContentValues().apply {

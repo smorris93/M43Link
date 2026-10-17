@@ -114,7 +114,7 @@ fun ConnectScreen() {
 
     val connecting = state is ConnectionState.Connecting
 
-    Scaffold(topBar = { TopAppBar(title = { Text("LumiLink") }) }) { innerPadding ->
+    Scaffold(topBar = { TopAppBar(title = { Text("M43Link") }) }) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -185,20 +185,18 @@ fun ConnectScreen() {
 
 /** Per-camera setup text shown under the connect button. */
 private fun setupInstructions(type: CameraType, supported: Boolean): String = when (type) {
-    CameraType.LUMIX_GX80 ->
+    CameraType.LUMIX ->
         "On the camera: Wi-Fi → New Connection → Remote Shooting & View, then enter " +
             "that hotspot's name here. Leave the password blank if the camera doesn't show " +
             "one. The first connection shows a one-time Android prompt; after that it " +
             "connects automatically."
-    CameraType.OM_SYSTEM_PEN ->
+    CameraType.OM_SYSTEM ->
         if (supported) {
             "On the camera: Wi-Fi Settings → Private, then launch the Wi-Fi and enter the " +
                 "hotspot's name and password here. The first connection shows a one-time " +
                 "Android prompt; after that it connects automatically."
         } else {
-            "OM System PEN support is on the way (Milestone 1 of the PEN plan). Connect will " +
-                "unlock once the PEN backend is implemented. On the camera, Wi-Fi Settings → " +
-                "Private is the mode it will use."
+            "Connect to the camera's Wi-Fi as usual."
         }
 }
 

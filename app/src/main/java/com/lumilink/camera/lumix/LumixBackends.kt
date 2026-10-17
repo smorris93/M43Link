@@ -88,7 +88,7 @@ fun lumixBackends(mediaStoreSaver: MediaStoreSaver): CameraBackends {
     val client = CameraClient()
     val downloadProfile = LumixDownloadProfile()
     return CameraBackends(
-        type = CameraType.LUMIX_GX80,
+        type = CameraType.LUMIX,
         connection = LumixConnection(client),
         photoLister = LumixPhotoLister(PhotoRepository(client)),
         control = LumixControl(client),

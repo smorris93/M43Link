@@ -432,7 +432,7 @@ fun opcBackends(context: Context, mediaStoreSaver: MediaStoreSaver): CameraBacke
     val fixtureDir = File(context.filesDir, "opc_fixtures")
     val connection = OpcConnection(client, fixtureDir)
     return CameraBackends(
-        type = CameraType.OM_SYSTEM_PEN,
+        type = CameraType.OM_SYSTEM,
         connection = connection,
         photoLister = OpcPhotoLister(client),
         control = OpcControl(client, connection, fixtureDir),
