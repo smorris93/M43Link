@@ -14,6 +14,7 @@ import com.lumilink.camera.LiveViewConfig
 import com.lumilink.di.AppContainer
 import com.lumilink.model.CameraExposure
 import com.lumilink.model.CameraStatus
+import com.lumilink.network.CameraException
 import com.lumilink.network.LiveViewStreamer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -74,10 +75,17 @@ class ControlViewModel(
                 _uiState.update { it.copy(recordModeReady = true) }
             } catch (e: Exception) {
                 // The camera may be asleep or still in playback; surface it but keep polling so a
-                // recovered camera heals the screen without a manual retry.
+                // recovered camera heals the screen without a manual retry. CameraExceptions carry
+                // user-ready text (pairing failures, per-camera "arrives in Milestone N" stubs).
                 Log.w(TAG, "enterRecordMode failed: ${e.message}")
                 _uiState.update {
-                    it.copy(message = "Couldn't switch the camera to record mode — wake it and try again.")
+                    it.copy(
+                        message = if (e is CameraException) {
+                            e.message
+                        } else {
+                            "Couldn't switch the camera to record mode — wake it and try again."
+                        },
+                    )
                 }
             }
             while (isActive) {

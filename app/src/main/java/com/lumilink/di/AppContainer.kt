@@ -3,6 +3,7 @@ package com.lumilink.di
 import android.content.Context
 import com.lumilink.camera.CameraBackends
 import com.lumilink.camera.lumix.lumixBackends
+import com.lumilink.camera.om.opcBackends
 import com.lumilink.data.CameraCredentialsStore
 import com.lumilink.data.MediaStoreSaver
 import com.lumilink.model.CameraType
@@ -27,7 +28,7 @@ class AppContainer(context: Context) {
 
     private val backendsByType: Map<CameraType, CameraBackends> = buildMap {
         put(CameraType.LUMIX_GX80, lumixBackends(mediaStoreSaver))
-        // OM_SYSTEM_PEN backends arrive with Milestone 1 (connection) of the PEN plan.
+        put(CameraType.OM_SYSTEM_PEN, opcBackends(context, mediaStoreSaver))
     }
 
     /** True when LumiLink can talk to [type] today (used to gate the Connect button). */

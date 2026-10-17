@@ -179,6 +179,21 @@ spec). PEN protocol not yet verified on hardware — Milestone 1 probes it.
   backend (PEN until M1) have Connect disabled. GX80 regression passed: pair → record mode →
   live view (178B-header frames) → ISO/status read-outs all confirmed on the phone.
   Gallery browse/download is delegation-only and wasn't device-tested (card removed from GX80).
+- **M1 PEN connection (done, verified on-device 2026-10-17):** PEN joins via the same
+  `WifiNetworkSpecifier` flow unchanged. `OpcClient` (UA `OI.Share v2`, `192.168.0.10`) + probe
+  with retry establish the session; M2/M3 stubs probe first then fail with an explicit message.
+  **PEN protocol findings (first body ever to talk to it, presumably):**
+  - Cleartext allowlist in `network_security_config.xml` had to add `192.168.0.10` (HTTP 520 →
+    "CLEARTEXT not permitted" before that).
+  - `get_imglist.cgi?DIR=/DCIM` → **200**, body `VER_100\r\n/DCIM,100OMSYS,0,16,23885,22261`
+    (captured as fixture `imglist_dcim.xml` in app `files/opc_fixtures/`) — classic Olympus
+    directory-listing format; M2 parses this.
+  - `get_camprop.cgi?com=desc&propname=desclist` → **520 + `<errorcode>1001</errorcode>`** from
+    a cold camera (Wi-Fi freshly launched, likely playback/standby state). Endpoint understood
+    but refuses — M3 starts from `switch_cammode.cgi` mode switching, mirroring the GX80's
+    rec/play juggling.
+  - Fixtures: `captureFixtures()` in `OpcConnection` writes any 200 responses to
+    `files/opc_fixtures/` — pull with `adb shell run-as com.lumilink cat files/opc_fixtures/<f>`.
 
 ## Sources
 - Lumix GX80 protocol: https://github.com/cleverfox/lumixproto

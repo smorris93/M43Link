@@ -1,11 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The camera speaks plain HTTP (no TLS) at 192.168.54.1 — cam.cgi control, the UPnP device
-  description (:60606), and the file server (:50001). Android blocks cleartext by default since
-  API 28, so we permit it ONLY for the camera's fixed address, keeping the rest of the app secure.
+  The cameras speak plain HTTP (no TLS) at fixed addresses on their own hotspots —
+  the Lumix GX80 at 192.168.54.1 (cam.cgi control, the UPnP device description on
+  :60606, and the file server on :50001), the OM System PEN at 192.168.0.10 (the
+  OPC CGIs and file serving). Android blocks cleartext by default since API 28, so
+  we permit it ONLY for those fixed addresses, keeping the rest of the app secure.
 -->
 <network-security-config>
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">192.168.54.1</domain>
+        <domain includeSubdomains="false">192.168.0.10</domain>
     </domain-config>
 </network-security-config>
