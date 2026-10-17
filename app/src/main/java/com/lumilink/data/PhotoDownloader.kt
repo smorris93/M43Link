@@ -3,12 +3,14 @@ package com.lumilink.data
 import android.util.Log
 import com.lumilink.camera.DownloadProfile
 import com.lumilink.model.CameraPhoto
+import android.net.Uri
 import com.lumilink.network.CameraException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.OutputStream
 import java.util.concurrent.TimeUnit
 
 /**
@@ -58,7 +60,13 @@ class PhotoDownloader(
                 val filename = fileNameFor(photo)
                 val mimeType = downloadProfile.mimeTypeFor(photo)
 
-                mediaStoreSaver.save(filename, mimeType, asDownload = photo.isRaw) { output ->
+                val save: ((OutputStream) -> Unit) -> Uri =
+                    if (downloadProfile.isVideo(photo)) {
+                        { write -> mediaStoreSaver.saveVideo(filename, mimeType, write) }
+                    } else {
+                        { write -> mediaStoreSaver.save(filename, mimeType, photo.isRaw, write) }
+                    }
+                save { output ->
                     body.byteStream().use { input ->
                         val buffer = ByteArray(BUFFER_SIZE)
                         var copied = 0L

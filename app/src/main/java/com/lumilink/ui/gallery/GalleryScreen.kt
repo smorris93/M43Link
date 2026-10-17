@@ -315,7 +315,11 @@ private fun PhotoCell(
             modifier = Modifier.align(Alignment.TopStart).padding(4.dp),
         ) {
             Text(
-                text = if (photo.isRaw) "RAW" else "JPG",
+                text = when {
+                    photo.isVideo -> "VID"
+                    photo.isRaw -> "RAW"
+                    else -> "JPG"
+                },
                 color = Color.White,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
@@ -384,7 +388,17 @@ private fun PhotoPreview(
                 enabled = !downloading,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(24.dp),
             ) {
-                Text(if (downloading) "Downloading…" else "Download ${if (photo.isRaw) "RAW" else "JPG"}")
+                Text(
+                    if (downloading) {
+                        "Downloading…"
+                    } else {
+                        "Download " + when {
+                            photo.isVideo -> "video"
+                            photo.isRaw -> "RAW"
+                            else -> "JPG"
+                        }
+                    },
+                )
             }
         }
     }

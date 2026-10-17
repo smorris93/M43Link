@@ -10,8 +10,8 @@ import java.io.OutputStream
 
 /**
  * Writes downloaded files into the device's shared media store (scoped storage), so they show up
- * in the Gallery / Files app. JPEGs go to Pictures/LumiLink; RAW files to Download/LumiLink (the
- * Images collection only accepts standard image types).
+ * in the Gallery / Files app. JPEGs go to Pictures/LumiLink; movies to Movies/LumiLink; RAW
+ * files to Download/LumiLink (the Images collection only accepts standard image types).
  *
  * Uses the API 29+ `IS_PENDING` pattern: mark the entry pending, write bytes, then publish.
  */
@@ -28,16 +28,29 @@ class MediaStoreSaver(context: Context) {
         mimeType: String,
         asDownload: Boolean,
         write: (OutputStream) -> Unit,
+    ): Uri = saveVideoAware(filename, mimeType, asDownload, asVideo = false, write)
+
+    /** Same as [save], with movies routed to the device's video collection. */
+    fun saveVideo(
+        filename: String,
+        mimeType: String,
+        write: (OutputStream) -> Unit,
+    ): Uri = saveVideoAware(filename, mimeType, asDownload = false, asVideo = true, write)
+
+    private fun saveVideoAware(
+        filename: String,
+        mimeType: String,
+        asDownload: Boolean,
+        asVideo: Boolean,
+        write: (OutputStream) -> Unit,
     ): Uri {
-        val collection = if (asDownload) {
-            MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-        } else {
-            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-        }
-        val relativePath = if (asDownload) {
-            "${Environment.DIRECTORY_DOWNLOADS}/LumiLink"
-        } else {
-            "${Environment.DIRECTORY_PICTURES}/LumiLink"
+        val (collection, relativePath) = when {
+            asVideo -> MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to
+                "${Environment.DIRECTORY_MOVIES}/LumiLink"
+            asDownload -> MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to
+                "${Environment.DIRECTORY_DOWNLOADS}/LumiLink"
+            else -> MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to
+                "${Environment.DIRECTORY_PICTURES}/LumiLink"
         }
 
         val pending = ContentValues().apply {

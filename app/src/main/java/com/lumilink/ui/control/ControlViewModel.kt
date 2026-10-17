@@ -18,6 +18,7 @@ import com.lumilink.model.SettableProp
 import com.lumilink.network.CameraException
 import com.lumilink.network.CameraWifiLocks
 import com.lumilink.network.LiveViewStreamer
+import com.lumilink.network.LiveViewTelemetry
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -66,6 +67,10 @@ class ControlViewModel(
     private val _liveFrame = MutableStateFlow<ImageBitmap?>(null)
     val liveFrame: StateFlow<ImageBitmap?> = _liveFrame.asStateFlow()
 
+    /** Latest per-frame telemetry from the live-view stream (null before the stream is up). */
+    @Volatile
+    private var telemetry: LiveViewTelemetry? = null
+
     private val streamer = LiveViewStreamer(control, liveView, wifiLocks)
     private var pollJob: Job? = null
     private var streamJob: Job? = null
@@ -100,8 +105,16 @@ class ControlViewModel(
                 try {
                     val status = control.fetchStatus()
                     _uiState.update {
-                        // A successful poll implies record mode is live even if the earlier switch errored.
-                        it.copy(status = status, recordModeReady = it.recordModeReady || status.mode == "rec")
+                        // A successful poll implies record mode is live even if the earlier
+                        // switch errored. Merge, don't replace: telemetry-owned fields (SD)
+                        // must survive the poll or the strip blinks.
+                        it.copy(
+                            status = it.status.copy(
+                                mode = status.mode,
+                                recording = status.recording,
+                            ),
+                            recordModeReady = it.recordModeReady || status.mode != null,
+                        )
                     }
                 } catch (e: Exception) {
                     Log.i(TAG, "status poll failed: ${e.message}")
@@ -137,13 +150,48 @@ class ControlViewModel(
         streamJob = viewModelScope.launch {
             while (isActive) {
                 try {
-                    streamer.run { frame -> onLiveFrame(frame) }
+                    streamer.run(
+                        onFrame = { frame -> onLiveFrame(frame) },
+                        onTelemetry = { onTelemetry(it) },
+                    )
                 } catch (e: Exception) {
                     Log.i(TAG, "live view stream error (will retry): ${e.message}")
                     _uiState.update { it.copy(liveViewActive = false) }
                     delay(LIVE_RETRY_MS)
                 }
             }
+        }
+    }
+
+    /**
+     * Applies per-frame telemetry: live exposure values (fresher than the property poll, which
+     * serves a snapshot that can lag physical dial changes), SD status, and AF feedback. Rate
+     * is throttled to one state update per second — the stream pushes ~30/s.
+     */
+    private var lastTelemetryApply = 0L
+    private fun onTelemetry(t: LiveViewTelemetry) {
+        telemetry = t
+        val now = System.currentTimeMillis()
+        if (now - lastTelemetryApply < TELEMETRY_APPLY_MS) return
+        lastTelemetryApply = now
+        // Only stable fields: the per-frame exposure values are the camera's *effective*
+        // (auto-computed) values — they jitter with the light and made the read-outs flicker,
+        // so the steppers show the camera's *set* values from the property poll instead.
+        _uiState.update { state ->
+            state.copy(
+                status = state.status.copy(
+                    sdCard = when {
+                        t.mediaStatus == null -> null
+                        t.mediaStatus == 0 -> "no card"
+                        else -> "card" + (t.remainingShots?.let { " · $it left" } ?: "")
+                    },
+                ),
+                message = if (t.afResult == 2 && state.message == null) {
+                    "Focus failed — check distance/contrast"
+                } else {
+                    state.message
+                },
+            )
         }
     }
 
@@ -278,6 +326,7 @@ class ControlViewModel(
         private const val TAG = "ControlViewModel"
         private const val POLL_INTERVAL_MS = 2_000L
         private const val LIVE_RETRY_MS = 1_500L
+        private const val TELEMETRY_APPLY_MS = 1_000L
 
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {

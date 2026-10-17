@@ -70,11 +70,12 @@ class OpcPhotoLister(
         photos
     }
 
-    /** Maps a listing record to a gallery photo, or null for files we don't handle yet. */
+    /** Maps a listing record to a gallery photo, or null for files we don't handle. */
     private fun photoFrom(entry: OpcListEntry): CameraPhoto? {
         val extension = entry.name.substringAfterLast('.', "").lowercase()
-        if (extension !in IMAGE_EXTENSIONS) {
-            if (extension !in IGNORED_EXTENSIONS) Log.i(TAG, "Skipping ${entry.name} (.$extension)")
+        val isVideo = extension in VIDEO_EXTENSIONS
+        if (!isVideo && extension !in IMAGE_EXTENSIONS) {
+            Log.i(TAG, "Skipping ${entry.name} (.$extension)")
             return null
         }
         return CameraPhoto(
@@ -84,7 +85,11 @@ class OpcPhotoLister(
             thumbnailUrl = OpcClient.urlFor(OpcClient.DEFAULT_BASE_URL, "$THUMBNAIL_DIR${entry.fullPath}"),
             originalUrl = OpcClient.urlFor(OpcClient.DEFAULT_BASE_URL, entry.fullPath),
             sizeBytes = entry.sizeBytes,
+            // Screennail serves the movie's first frame too (per the OPC spec), which also
+            // makes it the preview for videos.
             previewUrl = OpcClient.urlFor(OpcClient.DEFAULT_BASE_URL, "$SCREENNAIL_DIR${entry.fullPath}"),
+            isVideo = isVideo,
+            extension = extension,
         )
     }
 
@@ -98,8 +103,8 @@ class OpcPhotoLister(
 
         private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "orf")
 
-        /** Video extensions: expected on the card but not handled in the gallery (yet) — skip quietly. */
-        private val IGNORED_EXTENSIONS = setOf("mov", "mp4", "m4v", "avi", "mts", "m2ts", "lnk", "thm")
+        /** Movie files (the same set Olympus View handles) — shown in the gallery, downloadable. */
+        private val VIDEO_EXTENSIONS = setOf("mov", "mp4", "m4v", "avi", "mts", "m2ts")
 
         private const val MODE_SWITCH_DELAY_MS = 500L
         private const val MAX_PHOTOS = 2000

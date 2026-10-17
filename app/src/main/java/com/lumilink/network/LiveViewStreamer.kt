@@ -2,9 +2,9 @@ package com.lumilink.network
 
 import android.util.Log
 import com.lumilink.camera.CameraControl
-import com.lumilink.network.CameraException
 import com.lumilink.camera.FrameAssembler
 import com.lumilink.camera.LiveViewConfig
+import com.lumilink.network.CameraException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.isActive
@@ -36,7 +36,10 @@ class LiveViewStreamer(
      * Opens the UDP socket, asks the camera to stream to it, and invokes [onFrame] with each
      * assembled JPEG until the coroutine is cancelled. Suspends for the whole session; runs on IO.
      */
-    suspend fun run(onFrame: (ByteArray) -> Unit) = withContext(Dispatchers.IO) {
+    suspend fun run(
+        onFrame: (ByteArray) -> Unit,
+        onTelemetry: ((LiveViewTelemetry) -> Unit)? = null,
+    ) = withContext(Dispatchers.IO) {
         // Keep the radio awake: without the locks Android's Wi-Fi power save buffers the
         // camera's UDP packets and the live view stutters (observed on-device).
         wifiLocks?.acquire()
@@ -46,7 +49,7 @@ class LiveViewStreamer(
             soTimeout = SOCKET_TIMEOUT_MS
             bind(InetSocketAddress(liveView.port))
         }
-        val assembler = liveView.newFrameAssembler()
+        val assembler = liveView.newFrameAssembler(onTelemetry)
         var diagFrames = 0
         var diagDatagrams = 0
         var received = 0L
@@ -250,7 +253,9 @@ class StreamJpegAssembler : FrameAssembler {
  * it — matching the observed 260-byte offset. After stripping the RTP headers the remaining
  * payload is a clean JPEG byte stream, which [StreamJpegAssembler] frames by SOI/EOI.
  */
-class RtpJpegAssembler : FrameAssembler {
+class RtpJpegAssembler(
+    override val telemetry: ((LiveViewTelemetry) -> Unit)? = null,
+) : FrameAssembler {
     private val jpegAssembler = StreamJpegAssembler()
 
     /** Diagnostics: capture the first few frame-metadata extensions for offline analysis. */
@@ -263,7 +268,7 @@ class RtpJpegAssembler : FrameAssembler {
     private var droppedByLoss = 0
 
     override fun feed(datagram: ByteArray, length: Int, emit: (ByteArray) -> Unit) {
-        val payloadStart = rtpPayloadOffset(datagram, length) ?: return
+        val payloadStart = rtpPayloadOffset(datagram, length, emitTelemetry = true) ?: return
         val sequence = ((datagram[2].toInt() and 0xFF) shl 8) or (datagram[3].toInt() and 0xFF)
         if (lastSequence >= 0 && sequence != (lastSequence + 1) and 0xFFFF) {
             // Packets were lost — the frame being assembled has a hole. Drop it and let the
@@ -282,7 +287,11 @@ class RtpJpegAssembler : FrameAssembler {
      * Offset of the RTP payload (the JPEG stream bytes) in this datagram, or null when the
      * datagram isn't a valid RTP packet we understand (truncated, wrong version).
      */
-    private fun rtpPayloadOffset(datagram: ByteArray, length: Int): Int? {
+    private fun rtpPayloadOffset(
+        datagram: ByteArray,
+        length: Int,
+        emitTelemetry: Boolean = false,
+    ): Int? {
         if (length < RTP_HEADER_BYTES) return null
         val first = datagram[0].toInt() and 0xFF
         if (first and 0xC0 != 0x80) return null // not RTP v2
@@ -309,6 +318,12 @@ class RtpJpegAssembler : FrameAssembler {
             }
             offset = extensionStart + extensionWords * 4
             if (length <= offset) return null
+            if (emitTelemetry) {
+                // The extension carries the per-frame status fields (OPC spec p.28-42).
+                telemetry?.invoke(
+                    RtpTelemetryParser.parse(datagram, extensionStart, extensionWords * 4),
+                )
+            }
         }
         return offset
     }

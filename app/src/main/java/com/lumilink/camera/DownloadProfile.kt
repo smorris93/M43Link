@@ -26,4 +26,7 @@ interface DownloadProfile {
 
     /** File extension for [photo]'s original (e.g. "rw2" or "orf"). */
     fun fileExtensionFor(photo: CameraPhoto): String
+
+    /** True when the file belongs in the device's video store rather than images/downloads. */
+    fun isVideo(photo: CameraPhoto): Boolean = photo.isVideo
 }

@@ -4,6 +4,7 @@ import com.lumilink.camera.CameraBackends
 import com.lumilink.camera.CameraConnection
 import com.lumilink.camera.CameraControl
 import com.lumilink.camera.DownloadProfile
+import com.lumilink.camera.FrameAssembler
 import com.lumilink.camera.LiveViewConfig
 import com.lumilink.camera.PhotoLister
 import com.lumilink.data.MediaStoreSaver
@@ -16,6 +17,7 @@ import com.lumilink.model.CameraType
 import com.lumilink.model.SettableProp
 import com.lumilink.network.CameraClient
 import com.lumilink.network.CameraException
+import com.lumilink.network.LiveViewTelemetry
 import com.lumilink.network.OneDatagramJpegAssembler
 
 /**
@@ -63,7 +65,8 @@ private class LumixControl(private val client: CameraClient) : CameraControl {
 
 /** The GX80 pushes live view to port 49152, one full JPEG per UDP datagram. */
 private class LumixLiveViewConfig(override val port: Int = DEFAULT_PORT) : LiveViewConfig {
-    override fun newFrameAssembler() = OneDatagramJpegAssembler()
+    override fun newFrameAssembler(onTelemetry: ((LiveViewTelemetry) -> Unit)?): FrameAssembler =
+        OneDatagramJpegAssembler()
 
     private companion object {
         const val DEFAULT_PORT = 49152

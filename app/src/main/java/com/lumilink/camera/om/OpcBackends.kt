@@ -6,6 +6,7 @@ import com.lumilink.camera.CameraBackends
 import com.lumilink.camera.CameraConnection
 import com.lumilink.camera.CameraControl
 import com.lumilink.camera.DownloadProfile
+import com.lumilink.camera.FrameAssembler
 import com.lumilink.camera.LiveViewConfig
 import com.lumilink.camera.PhotoLister
 import com.lumilink.data.MediaStoreSaver
@@ -18,6 +19,7 @@ import com.lumilink.model.CameraType
 import com.lumilink.network.CamPropParser
 import com.lumilink.network.CameraException
 import com.lumilink.network.OpcClient
+import com.lumilink.network.LiveViewTelemetry
 import com.lumilink.network.RtpJpegAssembler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -147,9 +149,29 @@ private class OpcControl(
         // inside prepareRecordMode), then switch to record mode. lvqty picks the live-view
         // resolution (320x240 = the documented example size; the AF point space matches it).
         connection.establishSession()
+        val takemodeBefore = takemode
         client.getRaw("switch_cammode.cgi?mode=rec&lvqty=0320x0240")
         // Give the camera a beat to settle into rec mode before the streamer asks for live view.
         delay(MODE_SWITCH_DELAY_MS)
+        // Resync probe (also runs on every Control re-entry): does re-issuing the mode switch
+        // make the property queries reflect a dial change made mid-session? If yes, this
+        // doubles as the fix — the MODE read-out and stepper gating heal on tab return
+        // instead of requiring a reconnect.
+        runCatching {
+            val after = client.tryGet("get_camprop.cgi?com=get&propname=takemode")
+            if (after.first == 200) {
+                val fresh = VALUE_REGEX.find(after.second)?.groupValues?.getOrNull(1)
+                Log.i(TAG, "resync: takemode $takemodeBefore -> $fresh after cammode re-switch")
+                if (fresh != null && fresh != takemodeBefore) {
+                    takemode = fresh
+                    settableProps = settableProps.map {
+                        it.copy(canAdjust = isAdjustableInMode(it.name, fresh))
+                    }
+                }
+            } else {
+                Log.i(TAG, "resync: takemode query -> HTTP ${after.first}")
+            }
+        }
         if (!camInfoProbeDone) {
             camInfoProbeDone = true
             runCatching { cameraInfoProbe() }
@@ -229,12 +251,15 @@ private class OpcControl(
     }
 
     /**
-     * The PEN's readable status surface isn't mapped yet (battery/SD unknown — the one-shot
-     * camera-info probe collects candidates). Mode comes from our own tracking; the recording
-     * flag mirrors what we last asked the camera to do. Unknown fields stay null ("—" in UI).
+     * The PEN refuses `get_state.cgi` (520, an AIR-era command it dropped) and no battery
+     * exists anywhere in the protocol (spec + get_caminfo verified). Mode comes from our own
+     * tracking, the recording flag mirrors what we last asked the camera to do, and SD status
+     * arrives via live-view telemetry (see ControlViewModel), so it stays null here.
      */
     override suspend fun fetchStatus(): CameraStatus =
-        CameraStatus(mode = "rec", recording = movieActive)
+        CameraStatus(mode = takemode ?: "rec", recording = movieActive)
+
+
 
     override suspend fun fetchSettableProps(): List<SettableProp> {
         if (settableProps.isEmpty()) {
@@ -316,6 +341,7 @@ private class OpcControl(
         private const val TAG = "OpcControl"
         private const val MODE_SWITCH_DELAY_MS = 500L
         private const val PROBE_CALL_TIMEOUT_MS = 5_000L
+        private const val STATE_TIMEOUT_MS = 4_000L
         private const val PROBE_REC_MS = 3_000L
         private const val PROBE_SETTLE_MS = 1_000L
         private const val TAKEMODE_MOVIE = "movie"
@@ -331,8 +357,14 @@ private class OpcControl(
         private const val LIVE_VIEW_HEIGHT = 240
         private const val DESCLIST_QUERY = "get_camprop.cgi?com=desc&propname=desclist"
 
-        /** The settings surfaced as steppers, in display order. */
+        /**
+         * The settings surfaced as steppers, in display order. Mode is first: the PEN freezes
+         * its property snapshot for the session, so physical dial changes aren't visible until
+         * reconnect — changing mode from the app (a verified set) is the reliable path, and
+         * it re-gates the shutter/aperture steppers immediately.
+         */
         private val SETTABLE_PROPS = linkedMapOf(
+            "takemode" to "Mode",
             "isospeedvalue" to "ISO",
             "focalvalue" to "Aperture",
             "shutspeedvalue" to "Shutter",
@@ -342,7 +374,8 @@ private class OpcControl(
         /**
          * Whether the user can adjust [prop] in the camera's current [takemode]: shutter and
          * aperture are automatic outside S/M and A/M respectively (the camera rejects such
-         * sets with errorcode 3001 — measured on-device).
+         * sets with errorcode 3001 — measured on-device). Mode itself, ISO and EV adjust in
+         * every mode.
          */
         private fun isAdjustableInMode(prop: String, takemode: String?): Boolean = when {
             prop == "shutspeedvalue" -> takemode == "S" || takemode == "M"
@@ -368,7 +401,8 @@ private class OpcControl(
  * value (and frame format) is confirmed on-device in Milestone 3.
  */
 private class OpcLiveViewConfig(override val port: Int = DEFAULT_PORT) : LiveViewConfig {
-    override fun newFrameAssembler() = RtpJpegAssembler()
+    override fun newFrameAssembler(onTelemetry: ((LiveViewTelemetry) -> Unit)?): FrameAssembler =
+        RtpJpegAssembler(onTelemetry)
 
     private companion object {
         const val DEFAULT_PORT = 37789

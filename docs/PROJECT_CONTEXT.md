@@ -261,8 +261,35 @@ spec). PEN protocol not yet verified on hardware — Milestone 1 probes it.
     Scaffolds were re-applying the navigation-bar inset on top of the outer Scaffold's bottom-bar
     padding, double-counting ~200 px and crushing/clipping the bottom of every screen (the
     "white dots" under the shutter button = vertically clipped hint text). Affected the GX80 too.
-  - PEN status surface (battery/SD) still unmapped — fetchStatus reports mode only, read-outs
-    show "—". Candidates for a future probe: single-property gets.
+- **Spec validation + telemetry round (2026-10-18):** the full OPC/AIR spec was extracted to
+  text and every implementation detail validated against it; all confirmed correct. Two spec
+  deviations on the PEN: `new*`-prefixed verbs are refused (prefix-stripped forms work) and
+  `get_state.cgi` returns 520 (AIR-era command dropped).
+  - **Videos in the gallery:** MOV/MP4/M4V/AVI/MTS/M2TS now list with a VID badge, preview via
+    `get_screennail.cgi` (spec-confirmed first-frame), download to Movies/LumiLink with proper
+    MIME types. 222 items listed (204 stills + clips).
+  - **Live-view telemetry** (RTP extension "Individual Information Fields", spec p.28-42):
+    TLV records parsed per frame (AF result+frame, media status, remaining shots, shutter,
+    F-number, EV, ISO, focus mode). Used for: SD status + remaining shots in the status strip
+    (the refused get_state.cgi is unnecessary — SD was in the stream all along), and
+    focus-failed feedback. NOT used for read-out values: they are the camera's *effective*
+    (per-frame auto) values, which jitter with the light — the steppers show the camera's
+    *set* values from the property poll.
+  - **The desclist is a session snapshot that lags physical dial changes** (measured: desclist
+    AND single-property GETs both return the old mode after a dial turn). **BUT re-issuing
+    `switch_cammode.cgi?mode=rec` refreshes it** (measured: `takemode A -> S` on Control
+    re-entry) — prepareRecordMode re-issues the switch on every Control entry and heals the
+    MODE read-out + stepper gating, so dial changes are picked up by leaving and returning to
+    the Control tab (or instantly via the app's own Mode stepper; takemode is getset and is
+    now the first stepper). The definitive live source would be the spec's push-event channel
+    (`start_pushevent.cgi`, event 201 Operation Mode Changed) — future mini-milestone.
+  - **Status strip:** battery confirmed absent from the entire protocol (spec + get_caminfo);
+    hidden rather than dashed. MODE shows the live takemode; SD from telemetry; recording flag
+    locally tracked (camera-truth via push events is the future path).
+  - Future spec-sweep items noted: push-event channel (also camera-truth REC state + property
+    change events), AF-frame overlay + focus-result (data already parsed), `exec_pwoff.cgi`
+    remote power-off, `get_resizeimg.cgi` 0640-2560 sizes, movie metadata headers
+    (X-Movie-*), `get_imglist`/`get_imageinfo` per-file details.
 
 ## Sources
 - Lumix GX80 protocol: https://github.com/cleverfox/lumixproto
